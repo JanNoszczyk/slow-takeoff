@@ -191,3 +191,5 @@ gcp-login.json
 *.jsonl
 
 uv.lock
+
+wealtharc_api_responses.log
