@@ -64,40 +64,35 @@ const SummaryBar: React.FC<SummaryBarProps> = ({
       </select>
     </div>
 
-    {/* KPI cards */}
-    <div className="flex flex-col md:flex-row gap-6 justify-center items-stretch">
-      <div className="flex-1 min-w-[220px] bg-white rounded-2xl shadow-sm border border-gray-200 px-8 py-4 flex flex-col items-center">
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">
+    {/* Unified blue KPI bar */}
+    <div className="w-full rounded-2xl bg-blue-700 flex flex-row justify-between items-start gap-8 px-10 py-6 mb-2 shadow-md">
+      <div className="flex flex-col items-start flex-1 min-w-[160px]">
+        <div className="text-lg uppercase tracking-wide text-blue-100 mb-1 font-semibold" style={{ fontSize: "1.35rem" }}>
           Total Portfolios
         </div>
-        <div className="text-3xl font-bold text-blue-700">{totalPortfolios}</div>
-        <Sparkline data={spTotal} />
+        <div className="text-5xl font-extrabold text-white leading-tight">{totalPortfolios}</div>
       </div>
-
-      <div className="flex-1 min-w-[220px] bg-white rounded-2xl shadow-sm border border-gray-200 px-8 py-4 flex flex-col items-center">
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">
+      <div className="flex flex-col items-start flex-1 min-w-[160px]">
+        <div className="text-lg uppercase tracking-wide text-blue-100 mb-1 font-semibold" style={{ fontSize: "1.35rem" }}>
           Active Positions
         </div>
-        <div className="text-3xl font-bold text-blue-700">{activePositions}</div>
-        <Sparkline data={spActive} color="#059669" />
+        <div className="text-5xl font-extrabold text-white leading-tight">{activePositions}</div>
       </div>
-
-      <div className="flex-1 min-w-[260px] bg-white rounded-2xl shadow-sm border border-gray-200 px-8 py-4 flex flex-col items-center">
-        <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">
+      <div className="flex flex-col items-start flex-1 min-w-[220px]">
+        <div className="text-lg uppercase tracking-wide text-blue-100 mb-1 font-semibold" style={{ fontSize: "1.35rem" }}>
           Total Value (USD)
         </div>
-        <div className="text-3xl font-bold text-blue-700">
+        <div className="text-5xl font-extrabold text-white leading-tight">
           ${totalValue.toLocaleString()}
         </div>
-        <div className="flex gap-4 mt-2 text-sm">
-          <span className={pctColor(pctQuarter)}>
+        <div className="flex gap-6 mt-2 text-base">
+          <span className={pctQuarter > 0 ? "text-green-200" : pctQuarter < 0 ? "text-red-200" : "text-blue-100"}>
             {pctIcon(pctQuarter)} QTD {formatPct(pctQuarter)}
           </span>
-          <span className={pctColor(pctYear)}>
+          <span className={pctYear > 0 ? "text-green-200" : pctYear < 0 ? "text-red-200" : "text-blue-100"}>
             {pctIcon(pctYear)} YTD {formatPct(pctYear)}
           </span>
         </div>
-        <Sparkline data={spValue} color="#a21caf" />
       </div>
     </div>
   </section>
