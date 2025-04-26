@@ -1,4 +1,4 @@
-from dashboard_agent import generate_dashboard
+from .agent import generate_dashboard
 
 try:
     from openai import Tool

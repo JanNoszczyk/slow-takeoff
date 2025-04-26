@@ -36,3 +36,18 @@ def generate_dashboard() -> Dict[str, Any]:
             "message": f"Dashboard build failed: {e.stderr}",
             "output_path": None
         }
+
+if __name__ == "__main__":
+    try:
+        from openai import OpenAIAgent
+    except ImportError:
+        raise ImportError("openai-agents SDK is required. Install with: pip install openai")
+    from tools import dashboard_tool
+
+    agent = OpenAIAgent(
+        tools=[dashboard_tool],
+        name="DashboardAgent",
+        description="Agent for building and managing the dashboard app."
+    )
+    # This will start the agent's main loop (adjust as needed for your SDK version)
+    agent.run()
