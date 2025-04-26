@@ -1,9 +1,13 @@
 import os
+import asyncio
 import requests
 import yfinance as yf
+import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, HttpUrl, ValidationError # Added Pydantic types and ValidationError
+# Removed OpenAI client import as it's no longer used for parsing here
 
 # Import Agent SDK components
 try:
@@ -25,43 +29,25 @@ FRED_API_KEY = os.getenv("FRED_API_KEY")
 EIA_API_KEY = os.getenv("EIA_API_KEY")
 NEWSAPI_API_KEY = os.getenv("NEWSAPI_API_KEY")
 
-# --- Tool Implementations ---
+# --- Internal Logic Functions (Undecorated) ---
 
-@function_tool
-def get_yahoo_quote(symbol: str) -> Dict[str, Any]:
-    """Fetches near real-time quote data for a given stock symbol using Yahoo Finance.
-
-    Provides information like current price, day high/low, volume, market cap, etc.
-    Data might have a delay (typically ~15 minutes).
-
-    Args:
-        symbol: The stock ticker symbol (e.g., AAPL, MSFT).
-
-    Returns:
-        A dictionary containing quote information or an error message.
-    """
-    print(f"Tool: get_yahoo_quote called for {symbol}")
+def _internal_get_yahoo_quote(symbol: str) -> Dict[str, Any]:
+    """Core logic to fetch Yahoo Finance quote data."""
+    print(f"Logic: _internal_get_yahoo_quote called for {symbol}")
     try:
         ticker = yf.Ticker(symbol)
-        # .info provides a dictionary with various quote and company details
         info = ticker.info
-        if not info or info.get('quoteType') == 'MUTUALFUND': # yfinance sometimes returns minimal dict for errors/delisted
-             # Check for common error indicator or if it's not an equity/ETF
-             fast_info = ticker.fast_info # fast_info might be more reliable for basic checks
+        if not info or info.get('quoteType') == 'MUTUALFUND':
+             fast_info = ticker.fast_info
              if not fast_info or fast_info.get('last_price') is None:
+                  print(f"Tool: get_yahoo_quote for {symbol} failed or returned no data (ticker.info empty/mutualfund, fast_info empty).")
                   return {"error": f"Could not retrieve valid quote info for symbol {symbol}. It might be delisted or invalid."}
-             # If fast_info looks okay, return that instead
              print(f"Tool: get_yahoo_quote for {symbol} using fast_info fallback.")
-             # Add timestamp to fast_info
              fast_info['timestamp_utc'] = datetime.utcnow().isoformat()
              return {"quote": fast_info}
 
-
-        # Add a timestamp to the returned data
         info['timestamp_utc'] = datetime.utcnow().isoformat()
         print(f"Tool: get_yahoo_quote for {symbol} successful.")
-        # Return relevant parts of the info dict under a 'quote' key
-        # Select some common fields, but the agent can potentially access others if needed
         quote_data = {
             'symbol': info.get('symbol'),
             'shortName': info.get('shortName'),
@@ -84,43 +70,29 @@ def get_yahoo_quote(symbol: str) -> Dict[str, Any]:
         }
         return {"quote": quote_data}
     except Exception as e:
-        print(f"Error in get_yahoo_quote for {symbol}: {e}")
+        print(f"Error in _internal_get_yahoo_quote for {symbol}: {e}")
         return {"error": f"Failed to fetch Yahoo Finance quote: {str(e)}"}
 
-@function_tool
-def get_finnhub_news(symbol: str, count: int) -> List[Dict[str, Any]]:
-    """Fetches recent market news for a given stock symbol from Finnhub.
-
-    Args:
-        symbol: The stock ticker symbol (e.g., AAPL, MSFT).
-        count: The number of news articles to return.
-
-    Returns:
-        A list of news articles or an error message.
-    """
-    if count is None:
-        count = 10
-    print(f"Tool: get_finnhub_news called for {symbol} (count: {count})")
+def _internal_get_finnhub_news(symbol: str, count: int) -> List[Dict[str, Any]]:
+    """Core logic to fetch Finnhub news."""
+    print(f"Logic: _internal_get_finnhub_news called for {symbol} (count: {count})")
+    if count is None: count = 10
     if not FINNHUB_API_KEY:
+        print("Tool: get_finnhub_news failed: FINNHUB_API_KEY not set.")
         return {"error": "FINNHUB_API_KEY is not set."}
     try:
-        # Get today's date and date 7 days ago for the news range
         today = datetime.now().strftime('%Y-%m-%d')
         seven_days_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-
         url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={seven_days_ago}&to={today}&token={FINNHUB_API_KEY}"
         response = requests.get(url)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()
         news = response.json()
-
-        # Ensure news is a list and limit the count
         if isinstance(news, list):
             print(f"Tool: get_finnhub_news for {symbol} successful.")
             return news[:count]
         else:
              print(f"Tool: get_finnhub_news for {symbol} returned unexpected format: {news}")
              return {"error": "Finnhub returned unexpected news format."}
-
     except requests.exceptions.RequestException as e:
         print(f"Error fetching Finnhub news for {symbol}: {e}")
         return {"error": f"Failed to fetch Finnhub news: {str(e)}"}
@@ -128,33 +100,23 @@ def get_finnhub_news(symbol: str, count: int) -> List[Dict[str, Any]]:
         print(f"Error processing Finnhub news for {symbol}: {e}")
         return {"error": f"Failed to process Finnhub news: {str(e)}"}
 
-
-@function_tool
-def get_alphavantage_overview(symbol: str) -> Dict[str, Any]:
-    """Fetches company overview information (sector, industry, description, etc.) from AlphaVantage.
-
-    Args:
-        symbol: The stock ticker symbol (e.g., AAPL, MSFT).
-
-    Returns:
-        A dictionary containing company overview data or an error message.
-    """
-    print(f"Tool: get_alphavantage_overview called for {symbol}")
+def _internal_get_alphavantage_overview(symbol: str) -> Dict[str, Any]:
+    """Core logic to fetch AlphaVantage overview."""
+    print(f"Logic: _internal_get_alphavantage_overview called for {symbol}")
     if not ALPHAVANTAGE_API_KEY:
+        print("Tool: get_alphavantage_overview failed: ALPHAVANTAGE_API_KEY not set.")
         return {"error": "ALPHAVANTAGE_API_KEY is not set."}
     try:
         url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}"
         response = requests.get(url)
         response.raise_for_status()
         overview = response.json()
-        # Check if AlphaVantage returned an empty dict (common for invalid symbols) or error message
         if not overview or "Error Message" in overview or "Information" in overview:
             error_msg = overview.get("Error Message", overview.get("Information", f"No overview data found for {symbol}."))
             print(f"Tool: get_alphavantage_overview for {symbol} failed or returned no data: {error_msg}")
             return {"error": error_msg}
-
         print(f"Tool: get_alphavantage_overview for {symbol} successful.")
-        return {"overview": overview} # Nest under 'overview' key
+        return {"overview": overview}
     except requests.exceptions.RequestException as e:
         print(f"Error fetching AlphaVantage overview for {symbol}: {e}")
         return {"error": f"Failed to fetch AlphaVantage overview: {str(e)}"}
@@ -162,21 +124,12 @@ def get_alphavantage_overview(symbol: str) -> Dict[str, Any]:
         print(f"Error processing AlphaVantage overview for {symbol}: {e}")
         return {"error": f"Failed to process AlphaVantage overview: {str(e)}"}
 
-@function_tool
-def get_fred_series(series_id: str, limit: int) -> Dict[str, Any]:
-    """Fetches recent observations for a specific economic data series from FRED (Federal Reserve Economic Data).
-
-    Args:
-        series_id: The FRED series ID (e.g., 'GDP', 'UNRATE', 'DGS10' for 10-year Treasury).
-        limit: The maximum number of recent observations to return.
-
-    Returns:
-        A dictionary containing series observations or an error message.
-    """
-    if limit is None:
-        limit = 10
-    print(f"Tool: get_fred_series called for {series_id} (limit: {limit})")
+def _internal_get_fred_series(series_id: str, limit: int) -> Dict[str, Any]:
+    """Core logic to fetch FRED series data."""
+    print(f"Logic: _internal_get_fred_series called for {series_id} (limit: {limit})")
+    if limit is None: limit = 10
     if not FRED_API_KEY:
+        print("Tool: get_fred_series failed: FRED_API_KEY not set.")
         return {"error": "FRED_API_KEY is not set."}
     try:
         url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&limit={limit}&sort_order=desc"
@@ -187,9 +140,7 @@ def get_fred_series(series_id: str, limit: int) -> Dict[str, Any]:
              error_msg = data.get("error_message", f"No FRED observations found for series {series_id}.")
              print(f"Tool: get_fred_series for {series_id} failed or returned no data: {error_msg}")
              return {"error": error_msg}
-
         print(f"Tool: get_fred_series for {series_id} successful.")
-        # Return observations directly, potentially adding series_id for context
         return {"series_id": series_id, "observations": data["observations"]}
     except requests.exceptions.RequestException as e:
         print(f"Error fetching FRED series {series_id}: {e}")
@@ -198,59 +149,27 @@ def get_fred_series(series_id: str, limit: int) -> Dict[str, Any]:
         print(f"Error processing FRED series {series_id}: {e}")
         return {"error": f"Failed to process FRED series {series_id}: {str(e)}"}
 
-
-@function_tool
-def get_eia_series(series_id: str, limit: int) -> Dict[str, Any]:
-    """Fetches recent data for a specific series from the U.S. Energy Information Administration (EIA).
-
-    Note: EIA API v2 structure can vary. This attempts a common pattern.
-    Find series IDs via the EIA website or API documentation.
-
-    Args:
-        series_id: The EIA series ID (e.g., 'PET.W_EPC0_FPF_Y48SE_DPG.W' for Cushing OK WTI Spot Price).
-        limit: The maximum number of recent data points to return.
-
-    Returns:
-        A dictionary containing series data or an error message.
-    """
-    if limit is None:
-        limit = 10
-    print(f"Tool: get_eia_series called for {series_id} (limit: {limit})")
+def _internal_get_eia_series(series_id: str, limit: int) -> Dict[str, Any]:
+    """Core logic to fetch EIA series data."""
+    print(f"Logic: _internal_get_eia_series called for {series_id} (limit: {limit})")
+    if limit is None: limit = 10
     if not EIA_API_KEY:
+        print("Tool: get_eia_series failed: EIA_API_KEY not set.")
         return {"error": "EIA_API_KEY is not set."}
     try:
-        # Using EIA API v2 - route might vary slightly based on series type (e.g., /petroleum/pri/spt/)
-        # This is a generic attempt, might need refinement for specific series paths
         base_url = "https://api.eia.gov/v2"
-        # Construct the facet/data parts - this is complex and series-dependent
-        # Example for weekly petroleum spot price:
-        # /petroleum/pri/spt/data/?frequency=weekly&data[0]=value&facets[series][]=PET.W_EPC0_FPF_Y48SE_DPG.W&sort[0][column]=period&sort[0][direction]=desc&length=10
-        # This simplified version might work for some series by ID directly:
         url = f"{base_url}/seriesid/{series_id}?api_key={EIA_API_KEY}&out=json&num={limit}"
-        # A more robust V2 call often requires specifying frequency, data columns, facets etc.
-        # url = f"{base_url}/petroleum/pri/spt/data/?api_key={EIA_API_KEY}&frequency=weekly&data[0]=value&facets[series][]={series_id}&sort[0][column]=period&sort[0][direction]=desc&length={limit}&out=json"
-
-
         response = requests.get(url)
         response.raise_for_status()
         data = response.json()
-
-        # Check for errors or empty data in response structure
         if "response" not in data or "data" not in data["response"] or not data["response"]["data"]:
-            # Check for specific error message format
             error_msg = "No EIA data found or error occurred."
-            if "error" in data:
-                error_msg = data["error"]
-            elif "data" in data and "error" in data["data"]: # Some EIA errors are nested
-                 error_msg = data["data"]["error"]
-
+            if "error" in data: error_msg = data["error"]
+            elif "data" in data and "error" in data["data"]: error_msg = data["data"]["error"]
             print(f"Tool: get_eia_series for {series_id} failed or returned no data: {error_msg}")
             return {"error": error_msg}
-
         print(f"Tool: get_eia_series for {series_id} successful.")
-        # Return the data part of the response, potentially adding series_id
         return {"series_id": series_id, "data": data["response"]["data"]}
-
     except requests.exceptions.RequestException as e:
         print(f"Error fetching EIA series {series_id}: {e}")
         return {"error": f"Failed to fetch EIA series {series_id}: {str(e)}"}
@@ -258,38 +177,25 @@ def get_eia_series(series_id: str, limit: int) -> Dict[str, Any]:
         print(f"Error processing EIA series {series_id}: {e}")
         return {"error": f"Failed to process EIA series {series_id}: {str(e)}"}
 
-@function_tool
-def get_newsapi_headlines(query: str, count: int) -> List[Dict[str, Any]]:
-    """Fetches recent news headlines related to a query from NewsAPI.
-
-    Args:
-        query: The search query (e.g., company name, stock symbol, topic).
-        count: The number of headlines to return.
-
-    Returns:
-        A list of news articles or an error message.
-    """
-    if count is None:
-        count = 10
-    print(f"Tool: get_newsapi_headlines called for '{query}' (count: {count})")
+def _internal_get_newsapi_headlines(query: str, count: int) -> List[Dict[str, Any]]:
+    """Core logic to fetch NewsAPI headlines."""
+    print(f"Logic: _internal_get_newsapi_headlines called for '{query}' (count: {count})")
+    if count is None: count = 10
     if not NEWSAPI_API_KEY:
+        print("Tool: get_newsapi_headlines failed: NEWSAPI_API_KEY not set.")
         return {"error": "NEWSAPI_API_KEY is not set."}
     try:
-        # Use 'everything' endpoint for broader search, sort by relevancy or publishedAt
-        url = f"https://newsapi.org/v2/everything?q={query}&apiKey={NEWSAPI_API_KEY}&pageSize={min(count, 100)}&sortBy=publishedAt" # Can change sortBy
+        url = f"https://newsapi.org/v2/everything?q={query}&apiKey={NEWSAPI_API_KEY}&pageSize={min(count, 100)}&sortBy=publishedAt"
         response = requests.get(url)
         response.raise_for_status()
         news_data = response.json()
-
         if news_data.get("status") != "ok":
             error_msg = news_data.get("message", "NewsAPI returned an error.")
             print(f"Tool: get_newsapi_headlines for '{query}' failed: {error_msg}")
             return {"error": error_msg}
-
         articles = news_data.get("articles", [])
         print(f"Tool: get_newsapi_headlines for '{query}' successful.")
-        return articles # Return the list of articles
-
+        return articles
     except requests.exceptions.RequestException as e:
         print(f"Error fetching NewsAPI headlines for '{query}': {e}")
         return {"error": f"Failed to fetch NewsAPI headlines: {str(e)}"}
@@ -297,40 +203,284 @@ def get_newsapi_headlines(query: str, count: int) -> List[Dict[str, Any]]:
         print(f"Error processing NewsAPI headlines for '{query}': {e}")
         return {"error": f"Failed to process NewsAPI headlines: {str(e)}"}
 
+
+def _internal_perform_web_search(query: str) -> Dict[str, Any]:
+    """
+    Simulates performing a web search and manually structures the results.
+    """
+    print(f"Logic: Simulating _internal_perform_web_search for query: '{query}'")
+    # Simulate finding some results - replace with actual search/parsing logic
+    return {
+        "query": query,
+        "overall_summary": f"Simulated web search summary for '{query}': Key insights include topic A, trend B, and recent event C.",
+        "sentiment": "Neutral",
+        "sentiment_reasoning": "Based on simulated analysis of mixed headlines.",
+        "relevant_news": [
+            {
+                "headline": f"Simulated: Major Development Related to {query}",
+                "source_name": "Simulated News Source",
+                "source_url": f"https://example.com/simulated/{query.replace(' ', '-')}-1",
+                "summary": "A simulated event occurred impacting the subject.",
+                "publish_date": datetime.utcnow().isoformat(),
+            }
+        ],
+        "key_source_urls": [
+            f"https://example.com/simulated/{query.replace(' ', '-')}-1",
+        ],
+        "error": None # Indicate success
+    }
+
+
+# --- Pydantic Models for Structured Output (Single Definition Block) ---
+class YahooQuoteData(BaseModel):
+    quote: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+class FinnhubNewsData(BaseModel):
+    news: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+class AlphavantageOverviewData(BaseModel):
+    overview: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+class FredSeriesData(BaseModel):
+    data: Optional[Dict[str, Any]] = None # {'series_id': ..., 'observations': [...]}
+    error: Optional[str] = None
+
+class EiaSeriesData(BaseModel):
+    data: Optional[Dict[str, Any]] = None # {'series_id': ..., 'data': [...]}
+    error: Optional[str] = None
+
+class NewsApiHeadlinesData(BaseModel):
+    articles: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+class WebSearchNewsArticle(BaseModel):
+    headline: str = Field(..., description="Title of the news article.")
+    source_name: Optional[str] = Field(None, description="Name of the news source.")
+    source_url: HttpUrl = Field(..., description="URL of the news source.")
+    summary: Optional[str] = Field(None, description="Brief summary of the article content.")
+    publish_date: Optional[str] = Field(None, description="Publication date/time (ISO format or human-readable).")
+
+class WebSearchOutput(BaseModel):
+    query: str = Field(..., description="The original search query performed.")
+    overall_summary: str = Field(..., description="A synthesized summary paragraph of the key findings.")
+    sentiment: Optional[Literal["Positive", "Negative", "Neutral", "Mixed"]] = Field(None, description="Overall sentiment detected.")
+    sentiment_reasoning: Optional[str] = Field(None, description="Brief explanation for the detected sentiment.")
+    relevant_news: List[WebSearchNewsArticle] = Field(default_factory=list, description="List of relevant news articles found.")
+    key_source_urls: List[HttpUrl] = Field(default_factory=list, description="List of important source URLs.")
+    error: Optional[str] = None # To capture potential errors during web search/parsing
+
+class SymbolResearchData(BaseModel):
+    symbol: str
+    yahoo_quote: Optional[YahooQuoteData] = None
+    finnhub_news: Optional[FinnhubNewsData] = None
+    newsapi_headlines: Optional[NewsApiHeadlinesData] = None
+    alphavantage_overview: Optional[AlphavantageOverviewData] = None
+    fred_series: Dict[str, FredSeriesData] = Field(default_factory=dict) # Keyed by series_id
+    eia_series: Dict[str, EiaSeriesData] = Field(default_factory=dict)   # Keyed by series_id
+    web_search: Optional[WebSearchOutput] = None # CORRECT: Optional, default None
+
+class FullResearchReport(BaseModel):
+    report: List[SymbolResearchData] = Field(default_factory=list)
+
+# Update forward reference for SymbolResearchData
+# Ensure this is done *after* WebSearchOutput is defined
+print("DEBUG: Attempting SymbolResearchData.model_rebuild()")
+try:
+    SymbolResearchData.model_rebuild()
+    print("DEBUG: SymbolResearchData.model_rebuild() successful.")
+except Exception as e:
+    print(f"DEBUG: ERROR during SymbolResearchData.model_rebuild(): {e}")
+    import traceback
+    traceback.print_exc()
+# Removed the duplicate model definition block that was here
+
+
+# --- Tool Implementations (Decorated Wrappers) ---
+
+@function_tool
+def get_yahoo_quote(symbol: str) -> Dict[str, Any]:
+    """Fetches near real-time quote data for a given stock symbol using Yahoo Finance."""
+    return _internal_get_yahoo_quote(symbol)
+
+@function_tool
+def get_finnhub_news(symbol: str, count: int) -> List[Dict[str, Any]]:
+    """Fetches recent market news for a given stock symbol from Finnhub."""
+    return _internal_get_finnhub_news(symbol, count)
+
+@function_tool
+def get_alphavantage_overview(symbol: str) -> Dict[str, Any]:
+    """Fetches company overview information from AlphaVantage."""
+    return _internal_get_alphavantage_overview(symbol)
+
+@function_tool
+def get_fred_series(series_id: str, limit: int) -> Dict[str, Any]:
+    """Fetches recent observations for a specific economic data series from FRED."""
+    return _internal_get_fred_series(series_id, limit)
+
+@function_tool
+def get_eia_series(series_id: str, limit: int) -> Dict[str, Any]:
+    """Fetches recent data for a specific series from the EIA."""
+    return _internal_get_eia_series(series_id, limit)
+
+@function_tool
+def get_newsapi_headlines(query: str, count: int) -> List[Dict[str, Any]]:
+    """Fetches recent news headlines related to a query from NewsAPI."""
+    return _internal_get_newsapi_headlines(query, count)
+
+
+@function_tool
+def run_full_research(symbols: List[str], news_count: int, fred_series: Optional[List[str]] = None, eia_series: Optional[List[str]] = None) -> str:
+    """
+    Runs research jobs for a list of stock symbols. Fetches quote, news (Finnhub, NewsAPI),
+    overview, simulated web search, and specified FRED/EIA data. Returns aggregated results as JSON.
+
+    Args:
+        symbols: List of stock ticker symbols (e.g., ["AAPL", "MSFT"]).
+        news_count: Number of news articles/headlines per source (default: 5).
+        fred_series: Optional list of FRED series IDs (e.g., ["GDP", "UNRATE"]).
+        eia_series: Optional list of EIA series IDs.
+
+    Returns:
+        A JSON string representing a FullResearchReport object.
+    """
+    print(f"DEBUG: Entering run_full_research with symbols={symbols}, news_count={news_count}, fred={fred_series}, eia={eia_series}")
+    report_data = []
+    if news_count is None: news_count = 5 # Default news count
+    if fred_series is None: fred_series = [] # Ensure lists are not None
+    if eia_series is None: eia_series = []
+
+    for symbol in symbols:
+        print(f"DEBUG: Processing symbol: {symbol}")
+        # Instantiate the Pydantic model - web_search is Optional, no error here
+        symbol_data = SymbolResearchData(symbol=symbol)
+        print(f"DEBUG: SymbolResearchData instantiated successfully for {symbol}")
+
+        # --- Gather Data ---
+        print(f"DEBUG: Calling _internal_get_yahoo_quote for {symbol}")
+        quote_result = _internal_get_yahoo_quote(symbol=symbol)
+        print(f"DEBUG: _internal_get_yahoo_quote result: {str(quote_result)[:100]}...")
+
+        print(f"DEBUG: Calling _internal_get_finnhub_news for {symbol}")
+        fhub_news_result = _internal_get_finnhub_news(symbol=symbol, count=news_count)
+        print(f"DEBUG: _internal_get_finnhub_news result: {str(fhub_news_result)[:100]}...")
+
+        print(f"DEBUG: Calling _internal_get_newsapi_headlines for {symbol}")
+        napi_news_result = _internal_get_newsapi_headlines(query=symbol, count=news_count)
+        print(f"DEBUG: _internal_get_newsapi_headlines result: {str(napi_news_result)[:100]}...")
+
+        print(f"DEBUG: Calling _internal_get_alphavantage_overview for {symbol}")
+        overview_result = _internal_get_alphavantage_overview(symbol=symbol)
+        print(f"DEBUG: _internal_get_alphavantage_overview result: {str(overview_result)[:100]}...")
+
+        print(f"DEBUG: Calling _internal_perform_web_search for {symbol}")
+        web_search_result_dict = _internal_perform_web_search(query=symbol) # Gets the dict
+        print(f"DEBUG: _internal_perform_web_search result: {str(web_search_result_dict)[:100]}...")
+
+        fred_results = {}
+        print(f"DEBUG: Processing FRED series: {fred_series}")
+        for series_id in fred_series:
+            print(f"DEBUG: Calling _internal_get_fred_series for {series_id}")
+            fred_results[series_id] = _internal_get_fred_series(series_id=series_id, limit=5)
+            print(f"DEBUG: _internal_get_fred_series result for {series_id}: {str(fred_results[series_id])[:100]}...")
+
+        eia_results = {}
+        print(f"DEBUG: Processing EIA series: {eia_series}")
+        for series_id in eia_series:
+            print(f"DEBUG: Calling _internal_get_eia_series for {series_id}")
+            eia_results[series_id] = _internal_get_eia_series(series_id=series_id, limit=5)
+            print(f"DEBUG: _internal_get_eia_series result for {series_id}: {str(eia_results[series_id])[:100]}...")
+
+        # --- Populate Pydantic Model ---
+        print(f"DEBUG: Populating Pydantic model for {symbol}")
+        symbol_data.yahoo_quote = YahooQuoteData(**quote_result)
+        if isinstance(fhub_news_result, list): symbol_data.finnhub_news = FinnhubNewsData(news=fhub_news_result)
+        else: symbol_data.finnhub_news = FinnhubNewsData(**fhub_news_result)
+        if isinstance(napi_news_result, list): symbol_data.newsapi_headlines = NewsApiHeadlinesData(articles=napi_news_result)
+        else: symbol_data.newsapi_headlines = NewsApiHeadlinesData(**napi_news_result)
+        symbol_data.alphavantage_overview = AlphavantageOverviewData(**overview_result)
+
+        for series_id, result in fred_results.items():
+            if "error" in result: symbol_data.fred_series[series_id] = FredSeriesData(error=result["error"])
+            else: symbol_data.fred_series[series_id] = FredSeriesData(data=result)
+        for series_id, result in eia_results.items():
+            if "error" in result: symbol_data.eia_series[series_id] = EiaSeriesData(error=result["error"])
+            else: symbol_data.eia_series[series_id] = EiaSeriesData(data=result)
+
+        # Populate web_search safely
+        try:
+            symbol_data.web_search = WebSearchOutput(**web_search_result_dict)
+            if symbol_data.web_search.error:
+                 print(f"Note: Web search for {symbol} completed but reported an internal error: {symbol_data.web_search.error}")
+        except ValidationError as e:
+             print(f"Validation Error creating WebSearchOutput for {symbol}: {e}")
+             symbol_data.web_search = WebSearchOutput(query=symbol, overall_summary="Failed web search validation.", error=f"Validation Error: {e}")
+        except Exception as e:
+             print(f"Unexpected Error creating WebSearchOutput for {symbol}: {e}")
+             symbol_data.web_search = WebSearchOutput(query=symbol, overall_summary="Unexpected error processing web search.", error=f"Unexpected Error: {e}")
+
+        report_data.append(symbol_data)
+
+    final_report = FullResearchReport(report=report_data)
+    json_output = final_report.model_dump_json(indent=2)
+    print(f"DEBUG: run_full_research final JSON output (length: {len(json_output)}):\n{json_output[:500]}...")
+    return json_output
+
+
 # Example usage for testing tools directly
 if __name__ == '__main__':
-    async def test_tools():
-        print("--- Testing Stonk Research Tools ---")
-
-        symbol = "AAPL" # Apple
-        fred_series = "UNRATE" # Unemployment Rate
-        eia_series = "PET.W_EPC0_FPF_Y48SE_DPG.W" # WTI Spot Price
+    async def test_internal_logic():
+        print("--- Testing Stonk Research Tools (Internal Logic) ---")
+        symbol = "MSFT"
+        fred_id = "UNRATE"
+        eia_id = "PET.W_EPC0_FPF_Y48SE_DPG.W"
         query = "Apple iPhone semiconductor"
+        news_api_count = 3
+        finnhub_count = 3
+        econ_limit = 5
 
-        print(f"\n--- Testing get_yahoo_quote ({symbol}) ---")
-        quote = get_yahoo_quote(symbol=symbol)
-        print(json.dumps(quote, indent=2))
+        print(f"\n--- Testing _internal_get_yahoo_quote ({symbol}) ---")
+        try: print(json.dumps(_internal_get_yahoo_quote(symbol=symbol), indent=2))
+        except Exception as e: print(f"Error: {e}")
 
-        print(f"\n--- Testing get_finnhub_news ({symbol}) ---")
-        f_news = get_finnhub_news(symbol=symbol, count=3)
-        print(json.dumps(f_news, indent=2))
+        print(f"\n--- Testing _internal_get_finnhub_news ({symbol}) ---")
+        try: print(json.dumps(_internal_get_finnhub_news(symbol=symbol, count=finnhub_count), indent=2))
+        except Exception as e: print(f"Error: {e}")
 
-        print(f"\n--- Testing get_alphavantage_overview ({symbol}) ---")
-        overview = get_alphavantage_overview(symbol=symbol)
-        print(json.dumps(overview, indent=2))
+        print(f"\n--- Testing _internal_get_alphavantage_overview ({symbol}) ---")
+        try: print(json.dumps(_internal_get_alphavantage_overview(symbol=symbol), indent=2))
+        except Exception as e: print(f"Error: {e}")
 
-        print(f"\n--- Testing get_fred_series ({fred_series}) ---")
-        fred_data = get_fred_series(series_id=fred_series, limit=5)
-        print(json.dumps(fred_data, indent=2))
+        print(f"\n--- Testing _internal_get_fred_series ({fred_id}) ---")
+        try: print(json.dumps(_internal_get_fred_series(series_id=fred_id, limit=econ_limit), indent=2))
+        except Exception as e: print(f"Error: {e}")
 
-        print(f"\n--- Testing get_eia_series ({eia_series}) ---")
-        # Note: EIA series ID might require specific API path knowledge
-        eia_data = get_eia_series(series_id=eia_series, limit=5)
-        print(json.dumps(eia_data, indent=2))
+        print(f"\n--- Testing _internal_get_eia_series ({eia_id}) ---")
+        try: print(json.dumps(_internal_get_eia_series(series_id=eia_id, limit=econ_limit), indent=2))
+        except Exception as e: print(f"Error: {e}")
 
-        print(f"\n--- Testing get_newsapi_headlines ('{query}') ---")
-        n_news = get_newsapi_headlines(query=query, count=3)
-        print(json.dumps(n_news, indent=2))
+        print(f"\n--- Testing _internal_get_newsapi_headlines ('{query}') ---")
+        try: print(json.dumps(_internal_get_newsapi_headlines(query=query, count=news_api_count), indent=2))
+        except Exception as e: print(f"Error: {e}")
 
-    # Run async tests (most tools are sync here, but good practice if adding async ones)
-    asyncio.run(test_tools())
+        print(f"\n--- _internal_perform_web_search ({symbol}) ---")
+        try: print(json.dumps(_internal_perform_web_search(query=symbol), indent=2))
+        except Exception as e: print(f"Error: {e}")
+
+        print(f"\n--- run_full_research test skipped (requires agent Runner) ---")
+
+    try:
+        asyncio.run(test_internal_logic())
+    except RuntimeError: # Handle cases where asyncio event loop is already running (e.g., in Jupyter)
+         print("\nRunning tests synchronously (likely due to existing event loop)...")
+         # Simplified synchronous execution - call functions directly
+         symbol = "MSFT"
+         print(f"\n--- Testing _internal_get_yahoo_quote ({symbol}) ---")
+         print(json.dumps(_internal_get_yahoo_quote(symbol=symbol), indent=2))
+         # ... Add other necessary sync tests for internal functions if required ...
+         print(f"\n--- run_full_research test skipped (requires agent Runner) ---")
+    except TypeError as e:
+        print(f"\nTypeError during test execution: {e}")
+        # Add fallback synchronous tests if needed, similar to RuntimeError block
