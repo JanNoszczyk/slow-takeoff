@@ -16,8 +16,8 @@ import wealtharc_client
 
 # --- Configuration ---
 # GATEWAY_BASE_URL = "http://localhost:8000" # No longer needed
-LOG_FILE = "wealtharc_api_responses.log"
-REQUESTS_PER_ENDPOINT = 2 # Changed from 5 to 2
+LOG_FILE = "wealtharc_sample_data.log" # New log file for sample data
+REQUESTS_PER_ENDPOINT = 1 # Only need one request per endpoint for sampling
 # Map entity set names to client functions, including descriptions
 ENTITY_FUNCTION_MAP = {
     # /Assets: Returns financial asset details (Instruments, CashAccounts) including identifiers, classification, risk scores.
@@ -53,13 +53,12 @@ def call_endpoints():
     for entity_set, client_function in ENTITY_FUNCTION_MAP.items():
         logging.info(f"\n--- Calling API for: {entity_set} ---")
 
-        for i in range(REQUESTS_PER_ENDPOINT):
+        for i in range(REQUESTS_PER_ENDPOINT): # Loop will run only once as REQUESTS_PER_ENDPOINT = 1
             attempt = i + 1
-            logging.info(f"Attempt {attempt}/{REQUESTS_PER_ENDPOINT} for {entity_set} (limiting to 2 results)")
+            logging.info(f"Attempt {attempt}/{REQUESTS_PER_ENDPOINT} for {entity_set} (fetching top 500 results)") # Updated log message
 
-            # Call the appropriate function from wealtharc_client, limiting results to 2 using the 'top' parameter
-            # params = {"$top": 2} # Old way
-            response_data = client_function(top=2) # Use the new named argument
+            # Call the appropriate function, limiting results to 500 using the 'top' parameter
+            response_data = client_function(top=500) # Changed from 1000 to 500
 
             if response_data is not None:
                 # Log the JSON formatted nicely
