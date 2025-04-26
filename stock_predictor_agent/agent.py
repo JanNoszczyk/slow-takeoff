@@ -2,6 +2,8 @@ import os
 import asyncio
 import json
 import pandas as pd
+# Remove direct openai import if SDK handles client internally
+# import openai
 from pydantic import BaseModel, Field
 from typing import List, Any, Dict
 from dotenv import load_dotenv
@@ -20,29 +22,26 @@ except ImportError:
          # Try a hypothetical structure if 'agents' root doesn't work
          from openai_agents import Agent, Runner
     except ImportError:
-         raise ImportError("Could not find the 'openai-agents' library with expected structure.")
+          raise ImportError("Could not find the 'openai-agents' library with expected structure.")
 
 
-from tools import get_stock_data, execute_python_code # Import our tool functions
+# Import the decorated tool functions directly
+from tools import get_stock_data, execute_python_code, get_aggregated_data
 
 # Load environment variables
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    # The SDK might handle auth differently, but good practice to check
-    print("Warning: OPENAI_API_KEY found in environment, but SDK might use its own auth.")
-    # raise ValueError("OPENAI_API_KEY environment variable not set.")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") # SDK generally uses this automatically
+OPENAI_MODEL_ID = os.getenv("OPENAI_MODEL_ID")
 
 # --- Pydantic Models for Agent Outputs ---
 
 class PredictionOutput(BaseModel):
     """Output structure for each Coder Agent run."""
     approach_name: str = Field(description="Name of the prediction approach used (e.g., 'ARIMA', 'Linear Regression').")
-    # Changed to 'str' to ensure schema compatibility. Removed default as it's not allowed by the API schema generator.
-    prediction: str = Field(description="The final prediction result as a JSON string (e.g., '{\"prediction_value\": 150.5, \"signal\": \"BUY\"}').") # Removed default='{}'
+    # Use Dict for the prediction output from the executed code
+    prediction: Dict[str, Any] = Field(description="The final prediction result dictionary (e.g., {'prediction_value': 150.5, 'signal': 'BUY'}).")
     report: str = Field(description="A brief report explaining the methodology, findings, and confidence.")
-    code: str = Field(description="The Python code generated and executed for the analysis.")
+    code: str = Field(description="The Python code generated for the analysis.")
     # Removed defaults as they might be causing schema issues
     tool_stdout: str = Field(description="Captured stdout from the executed code.")
     tool_stderr: str = Field(description="Captured stderr from the executed code.")
@@ -58,106 +57,82 @@ class JudgeInput(BaseModel):
 class FinalDecision(BaseModel):
     """Output structure for the Judge Agent."""
     best_approach_name: str = Field(description="The name of the selected best approach.")
-    # Changed to 'str' for schema compatibility. This will contain the JSON string from the selected PredictionOutput.
-    best_prediction: str = Field(description="The prediction from the selected best approach (as a JSON string).")
+    # Use Dict to match the type in PredictionOutput
+    best_prediction: Dict[str, Any] = Field(description="The prediction dictionary from the selected best approach.")
     best_report: str = Field(description="The report from the selected best approach.")
     best_code: str = Field(description="The code from the selected best approach.")
     judge_reasoning: str = Field(description="The judge's reasoning for selecting this result.")
 
-# --- Tool Integration (Needs verification based on SDK specifics) ---
+# --- Tool Integration (Using SDK's @function_tool) ---
 
-# How does the SDK make tools available? Let's assume they need to be defined
-# in a way the Agent class understands. The example used built-in tools.
-# For custom tools, we might need wrappers or a specific registration mechanism.
-
-# Placeholder: Define tool metadata in the format the SDK might expect (similar to OpenAI functions)
-# This is a guess based on common patterns.
-AGENT_TOOLS_METADATA = [
-     {
-        "type": "function", # Assuming 'function' type if custom are supported
-        "function": {
-            "name": "get_stock_data",
-            "description": "Fetches historical stock data (OHLCV) for a given symbol. Returns JSON data.",
-            "parameters": { # Matches Anthropic/OpenAI schema style
-                "type": "object",
-                "properties": {
-                    "stock_symbol": {"type": "string", "description": "The stock ticker symbol (e.g., AAPL, MSFT)."},
-                    "start_date": {"type": "string", "description": "Optional. Start date in YYYY-MM-DD format."},
-                    "end_date": {"type": "string", "description": "Optional. End date in YYYY-MM-DD format."},
-                    "timeframe": {"type": "string", "description": "Optional. Data frequency (e.g., '1D', '1H'). Defaults '1D'."}
-                },
-                "required": ["stock_symbol"],
-            },
-        }
-     },
-     {
-        "type": "function",
-        "function": {
-            "name": "execute_python_code",
-            "description": "Executes Python code for analysis/prediction. Fetched data is available as pandas DataFrame 'df'. Assign result to 'prediction_output'.",
-             "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {"type": "string", "description": "Python code string to execute."},
-                },
-                "required": ["code"],
-            },
-        }
-     }
-]
-
-# How context (like the fetched 'df') is passed during tool execution by the SDK's Runner
-# is unclear from the example. We might need to manage this externally or hope
-# the SDK provides a mechanism (e.g., via ctx.context passed to runner).
+# --- Tool Integration (Using SDK's @function_tool) ---
+# No need for AGENT_TOOLS_METADATA. The SDK uses the decorated functions directly.
+# Context passing will be handled via Runner.run(..., context=...) and ctx argument in tools.
 
 
 # --- Agent Definitions ---
 
 # Base instructions for coder agents
 CODER_BASE_INSTRUCTIONS = """
-You are a Quantitative Analyst Agent. Your task is to analyze historical stock data for {stock_symbol} and generate Python code to predict its future price movement based on the '{approach_name}' approach.
+You are a Quantitative Analyst Agent. Your task is to analyze historical stock data for {stock_symbol} and predict its future price movement based on the '{approach_name}' approach using the tools provided.
 
-1. You will be provided with historical stock data in a pandas DataFrame named 'df'.
-2. Use the '{approach_name}' methodology. Be creative if the name is generic (e.g., 'Trend Following').
-3. Generate Python code using pandas and numpy (available as 'pd' and 'numpy'). You can request 'sklearn' or 'statsmodels' if needed for the specific approach.
-4. The code MUST assign its final prediction result (which should be a dictionary, e.g., {{{{ 'prediction_value': 150.5, 'signal': 'BUY' }}}}) to a variable named `prediction_output`.
-5. The code should focus ONLY on calculation and assigning `prediction_output`. Avoid plotting or file I/O.
-6. After generating the code, explain your methodology clearly in a brief report.
-7. Structure your final output according to the required PredictionOutput format. IMPORTANT: The 'prediction' field in your final output MUST be a JSON STRING representation of the dictionary result from your code (e.g., prediction='{{\\"prediction_value\\": 150.5, \\"signal\\": \\"BUY\\"}}').
+1.  **Analyze Data**: You have access to historical stock data ('df') and aggregated news/trends ('aggregated_data') through the context provided to the `execute_python_code` tool.
+2.  **Select Methodology**: Apply the '{approach_name}' methodology. Incorporate insights from BOTH the stock data AND the aggregated data where relevant. Be creative if the name is generic (e.g., 'Trend Following', 'Sentiment Analysis').
+3.  **Generate Code**: Generate Python code using pandas ('pd') and numpy ('numpy'). The code MUST assign its final prediction result (a Python dictionary, e.g., `{{'prediction_value': 150.5, 'signal': 'BUY', 'confidence_based_on_news': 0.7}}`) to a variable named `prediction_output`. Focus ONLY on calculation; avoid plotting or file I/O.
+4.  **Execute Code**: Use the `execute_python_code` tool, passing the generated code string to it. This tool will run the code with the 'df' and 'aggregated_data' context available.
+5.  **Generate Report**: Write a brief report explaining your methodology, findings, and confidence.
+6.  **Final Output**: Structure your final output according to the `PredictionOutput` format. The `prediction` field should contain the *dictionary* returned by the `execute_python_code` tool's `prediction_output` key. The `tool_stdout`, `tool_stderr`, and `error` fields should be populated from the tool's result if available.
 """
 
 # Judge agent instructions
 JUDGE_INSTRUCTIONS = """
 You are a Chief Investment Officer Agent. You have received multiple stock prediction analyses for the same request from different Quantitative Analyst Agents, each using a different approach.
-Your task is to evaluate these analyses based on the provided prediction (which is a JSON string), report, code, and any execution output/errors.
+Your task is to evaluate these analyses based on the provided prediction (which is a dictionary), report, code, and any execution output/errors.
 
-Input: A list of PredictionOutput objects, where the 'prediction' field contains a JSON string.
+Input: A list of PredictionOutput objects, where the 'prediction' field contains a Python dictionary.
 
 Evaluation Criteria:
 1.  **Clarity and Soundness of Methodology:** Does the report clearly explain a reasonable approach?
 2.  **Code Quality:** Is the provided Python code relevant, correct for the described approach, and safe (no obvious malicious patterns)?
-3.  **Prediction Plausibility:** Does the prediction seem reasonable given the data and approach (without guaranteeing accuracy)?
-4.  **Execution Success:** Did the code run successfully (check stderr/error fields)? Penalize runs with significant errors.
-5.  **Consistency:** Do the report, code, and the content of the prediction JSON string align?
+3.  **Prediction Plausibility:** Does the prediction dictionary seem reasonable given the data and approach (without guaranteeing accuracy)?
+4.  **Execution Success:** Did the code run successfully (check tool_stdout/tool_stderr/error fields)? Penalize runs with significant errors.
+5.  **Consistency:** Do the report, code, and the prediction dictionary align?
 
-Output: Select the *single best* analysis and provide your reasoning, adhering to the FinalDecision format. Copy the selected JSON string prediction into the 'best_prediction' field. If no analysis is satisfactory, explain why.
+Output: Select the *single best* analysis and provide your reasoning, adhering to the FinalDecision format. Copy the selected prediction dictionary into the 'best_prediction' field. If no analysis is satisfactory, explain why.
 """
 
 # Define Agent instances (assuming Agent() takes instructions and tool metadata)
-# Note: Tool usage might be handled by the Runner, not defined per agent. This needs clarification from SDK docs.
-judge_agent = Agent(
-    name="JudgeAgent",
-    instructions=JUDGE_INSTRUCTIONS,
-    output_type=FinalDecision, # Specify Pydantic model for output validation
-    # tools = [], # Judge might not need tools directly
-)
+# Attempting to pass model and potentially api_key if supported by the Agent class
+try:
+    judge_agent = Agent(
+        name="JudgeAgent",
+        instructions=JUDGE_INSTRUCTIONS,
+        output_type=FinalDecision, # Specify Pydantic model for output validation
+        # tools = [], # Judge doesn't need tools directly
+        model=OPENAI_MODEL_ID,
+        # api_key=OPENAI_API_KEY # SDK handles API key via environment variable
+        # client=client
+    )
+    # print("Initialized JudgeAgent.") # Simpler log
+except TypeError as e:
+     # Provide a more informative warning if model arg fails
+     print(f"Warning: Could not pass 'model' to JudgeAgent init: {e}. Using SDK default model.")
+     judge_agent = Agent(
+         name="JudgeAgent",
+         instructions=JUDGE_INSTRUCTIONS,
+         output_type=FinalDecision
+     )
+
 
 # Coder agents will be created dynamically in the main loop
 
 # --- Main Orchestration Logic ---
 
-async def run_analysis_approach(approach_name: str, stock_symbol: str, stock_data_context: Dict) -> PredictionOutput:
-    """Runs a single coder agent for a specific approach."""
+async def run_analysis_approach(approach_name: str, stock_symbol: str, stock_data_context: Dict, aggregated_data_context: Dict) -> PredictionOutput:
+    """
+    Runs a single coder agent for a specific approach, providing both
+    stock price data ('df') and aggregated news/trends data ('aggregated_data').
+    """
     print(f"---> Starting analysis for approach: {approach_name}")
     # Correctly escape braces for .format()
     try:
@@ -170,84 +145,57 @@ async def run_analysis_approach(approach_name: str, stock_symbol: str, stock_dat
         print("Ensure all curly braces intended for literal output are doubled (e.g., {{ example }} )")
         raise # Re-raise the error after printing context
 
-    coder_agent = Agent(
-        name=f"CoderAgent_{approach_name.replace(' ', '_')}",
-        instructions=coder_instructions,
-        output_type=PredictionOutput,
-        # output_schema_strict=False, # Removed: This parameter is not valid for Agent.__init__
-        # tools=AGENT_TOOLS_METADATA, # How are tools linked? Assume Runner knows?
-    )
+    # Attempt to pass model and API key to Coder Agent
+    try:
+        coder_agent = Agent(
+            name=f"CoderAgent_{approach_name.replace(' ', '_')}",
+            instructions=coder_instructions,
+            output_type=PredictionOutput,
+            model=OPENAI_MODEL_ID,
+            # api_key=OPENAI_API_KEY, # Remove API key param
+            # client=client,
+            tools=[get_stock_data, execute_python_code, get_aggregated_data], # Pass decorated tools
+        )
+        # print(f"Initialized CoderAgent {approach_name}.") # Simpler log
+    except TypeError as e:
+        print(f"Warning: Could not pass 'model' or 'tools' to CoderAgent init: {e}. Using SDK defaults.")
+        coder_agent = Agent(
+            name=f"CoderAgent_{approach_name.replace(' ', '_')}",
+            instructions=coder_instructions,
+            output_type=PredictionOutput,
+            tools=[get_stock_data, execute_python_code, get_aggregated_data] # Pass tools here too
+        )
 
     # How to pass context (stock_data_context) to the execution?
     # This is the biggest uncertainty with the SDK example.
     # Option 1: Runner takes context? `Runner.run(..., context=stock_data_context)`
     # Option 2: Inject data description into the prompt? (Less ideal)
     # Option 3: A special tool to load context?
-    # Let's assume Option 1 for now.
-
-    # The initial prompt for the coder agent
-    coder_prompt = f"Analyze the provided stock data for {stock_symbol} using the {approach_name} approach and generate the prediction, report, and code."
+    # The initial prompt for the coder agent, guiding it to use the tool
+    coder_prompt = f"Analyze the stock data for {stock_symbol} using the {approach_name} approach. Generate the Python code, then use the 'execute_python_code' tool to run it, and finally formulate the report and final output structure."
 
     try:
-        # Assume Runner.run needs agent, prompt, and potentially context for tools
-        # The context might need to include the actual tool functions if not globally registered
+        # Context for the Runner only needs the data; tools are linked via the Agent.
         runner_context = {
-            "stock_data_dict": stock_data_context, # Pass raw data dict
-            "tools": { # Map names to functions if Runner needs it
-                 "get_stock_data": get_stock_data, # Might not be needed by coder if data is pre-fetched
-                 "execute_python_code": execute_python_code
-            }
-             # Add OPENAI_API_KEY if SDK doesn't handle it automatically?
-             # "openai_api_key": OPENAI_API_KEY
+            "stock_data_dict": stock_data_context,
+            "aggregated_data_dict": aggregated_data_context
         }
 
-        # *** THIS IS THE CRITICAL UNKNOWN ***
-        # How does the Runner execute tools defined in `tools.py` and pass context?
-        # The example only shows built-in tools or simple agent handoffs.
-        # We'll proceed with a plausible call signature.
+        # The Runner will now execute the tools passed to the Agent.
+        # The agent needs to be instructed to call the `execute_python_code` tool.
+        # The tool will receive the context via its `ctx` parameter.
         result = await Runner.run(
             coder_agent,
             coder_prompt,
-            # context=runner_context # Pass data and potentially tool functions via context?
+            context=runner_context # Pass data and tool functions via context
         )
 
         # Assuming result.final_output contains the structured output
+        # The SDK's Runner should have handled the tool call (`execute_python_code`)
+        # and the agent should have used the tool's output to populate the PredictionOutput.
         prediction_result = result.final_output_as(PredictionOutput)
 
-        # *** POST-PROCESSING / TOOL EXECUTION HANDLING ***
-        # If the agent *generates* code but doesn't *execute* it via a tool call within the run:
-        # We might need to manually call `execute_python_code` here using the generated code
-        # and the `stock_data_context`, then update the `prediction_result`.
-
-        # Example of manual execution if the SDK doesn't handle it implicitly:
-        # Check if code exists AND prediction is the default empty JSON string, indicating it wasn't set by the agent/tool run
-        if prediction_result.code and prediction_result.prediction == '{}':
-             print(f"Manually executing code for approach: {approach_name}")
-             exec_output = execute_python_code(prediction_result.code, stock_data_context)
-
-             # Format the prediction output as JSON string
-             pred_dict = exec_output.get("prediction_output")
-             final_prediction_str = '{}' # Default to empty JSON string
-             if pred_dict is not None:
-                 try:
-                     # Attempt to serialize the output from the executed code
-                     final_prediction_str = json.dumps(pred_dict)
-                 except TypeError as json_err:
-                      print(f"Warning: Could not JSON serialize prediction output for {approach_name}: {json_err}")
-                      # Serialize error info instead
-                      final_prediction_str = json.dumps({"error": "Serialization failed", "raw_output": str(pred_dict)})
-             prediction_result.prediction = final_prediction_str # Assign the JSON string
-
-             prediction_result.tool_stdout = exec_output.get("stdout", "")
-             prediction_result.tool_stderr = exec_output.get("stderr", "")
-             prediction_result.error = exec_output.get("error", "") # Overwrite any previous agent error with execution error if any
-             # Update the report if execution failed
-             if prediction_result.error:
-                  # Ensure report is not None before appending
-                  if prediction_result.report is None: prediction_result.report = ""
-                  prediction_result.report += f"\n\nMANUAL EXECUTION ERROR: {prediction_result.error}"
-                  prediction_result.report += f"\nSTDERR:\n{prediction_result.tool_stderr}"
-
+        # *** Manual execution logic is removed ***
 
         print(f"<--- Finished analysis for approach: {approach_name}")
         # Ensure approach_name is set, sometimes models forget
@@ -256,13 +204,12 @@ async def run_analysis_approach(approach_name: str, stock_symbol: str, stock_dat
 
     except Exception as e:
         print(f"XXXX ERROR running approach {approach_name}: {e}")
-        # Return an error-filled PredictionOutput
+        # Return a simplified error-filled PredictionOutput
         return PredictionOutput(
             approach_name=approach_name,
-            prediction="", # Provide default empty string for prediction field since default was removed
-            report=f"Failed to run agent for this approach. Error: {str(e)}",
+            prediction={}, # Default to empty dict
+            report=f"Failed to run agent or process result for this approach. Error: {str(e)}",
             code="",
-            # Provide default empty strings for fields that no longer have defaults in the model
             tool_stdout="",
             tool_stderr="",
             error=str(e)
@@ -281,10 +228,32 @@ async def main(stock_symbol: str, approaches: List[str]):
         print(f"Failed to fetch initial data: {stock_data_context.get('error', 'No data returned')}")
         return
 
-    print(f"Data fetched successfully ({len(stock_data_context['data'])} records). Running coder agents in parallel...")
+    print(f"Stock data fetched successfully ({len(stock_data_context['data'])} records).")
 
-    # 2. Run Coder Agents in Parallel
-    tasks = [run_analysis_approach(name, stock_symbol, stock_data_context) for name in approaches]
+    # 1b. Fetch aggregated data
+    print("Fetching aggregated news/trends data...")
+    # Use stock_symbol as query_name and query_symbol for simplicity
+    # A more robust approach might involve getting the company name separately
+    # Await the async tool function call
+    aggregated_data_context = await get_aggregated_data(query_name=stock_symbol, query_symbol=stock_symbol)
+    # Check for errors in the returned dictionary
+    if aggregated_data_context.get("error") or (isinstance(aggregated_data_context.get("errors"), list) and aggregated_data_context["errors"]):
+        print(f"Warning: Failed to fetch or encountered errors during aggregated data fetch: {aggregated_data_context.get('error', aggregated_data_context.get('errors'))}")
+        # Proceed without aggregated data if fetching failed
+        aggregated_data_context = {"data": {}, "errors": ["Fetching failed or returned errors"]}
+    else:
+        print("Aggregated data fetched successfully.")
+        # Optional: Log summary of fetched aggregated data
+        for key, data in aggregated_data_context.get("data", {}).items():
+             if isinstance(data, list):
+                  print(f"  - {key}: {len(data)} records")
+             elif isinstance(data, dict) and "error" in data:
+                  print(f"  - {key}: Error - {data['error']}")
+
+
+    print("Running coder agents in parallel...")
+    # 2. Run Coder Agents in Parallel, passing both data contexts
+    tasks = [run_analysis_approach(name, stock_symbol, stock_data_context, aggregated_data_context) for name in approaches]
     coder_results: List[PredictionOutput] = await asyncio.gather(*tasks)
 
     # Filter out failed runs if needed, though judge can handle errors
@@ -342,21 +311,17 @@ async def main(stock_symbol: str, approaches: List[str]):
         print("\n======= JUDGE'S FINAL DECISION =======")
         print(f"Selected Approach: {final_decision.best_approach_name}")
         print(f"Judge's Reasoning: {final_decision.judge_reasoning}")
-        print("\n--- Best Prediction (JSON String) ---")
-        print(final_decision.best_prediction)
-        # Attempt to parse and print the prediction dict prettily
+        # Print the prediction dictionary directly
+        print("\n--- Best Prediction (Dictionary) ---")
         try:
-            # Ensure the prediction is not None or empty before parsing
-            if final_decision.best_prediction and final_decision.best_prediction.strip():
-                 best_prediction_dict = json.loads(final_decision.best_prediction)
-                 print("\n--- Best Prediction (Parsed) ---")
-                 print(json.dumps(best_prediction_dict, indent=2))
+            # Ensure the prediction is not None/empty dict before printing
+            if final_decision.best_prediction:
+                 print(json.dumps(final_decision.best_prediction, indent=2))
             else:
-                 print("\n--- Best Prediction (Parsed) ---")
-                 print("(Empty prediction string received)")
-        except json.JSONDecodeError as json_err:
-            print(f"(Could not parse prediction JSON string: {json_err})")
-            print(f"Raw string: {final_decision.best_prediction}")
+                 print("(Empty prediction dictionary received)")
+        except Exception as print_err: # Catch potential errors during printing/serialization
+            print(f"(Could not display prediction dictionary: {print_err})")
+            print(f"Raw data: {final_decision.best_prediction}")
 
 
         print("\n--- Best Report ---")

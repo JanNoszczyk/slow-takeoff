@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import dateutil.parser # For parsing datetime strings
+import duckdb
 
 from wa import config, db
 
@@ -167,16 +168,19 @@ def store_clean_news_data(articles: List[Dict[str, Any]], con: duckdb.DuckDBPyCo
 
     now_ts = datetime.now(timezone.utc)
     insert_sql = """
-        INSERT INTO news_raw (news_id, source, published_at, fetched_at, title, url, snippet, body)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO news_raw (news_id, asset_id, source_name, author, title, description, url, url_to_image, published_at, content, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (news_id) DO UPDATE SET
-            source = excluded.source,
+            asset_id = excluded.asset_id,
+            source_name = excluded.source_name,
+            author = excluded.author,
             published_at = excluded.published_at,
             fetched_at = excluded.fetched_at,
             title = excluded.title,
+            description = excluded.description,
             url = excluded.url,
-            snippet = excluded.snippet,
-            body = excluded.body;
+            url_to_image = excluded.url_to_image,
+            content = excluded.content;
         -- Optionally add sentiment fields if computed here
     """
     data_to_insert = []
@@ -186,9 +190,11 @@ def store_clean_news_data(articles: List[Dict[str, Any]], con: duckdb.DuckDBPyCo
         source_name = article.get('source', {}).get('name', 'Unknown')
         published_dt = parse_datetime(article.get('publishedAt'))
         title = article.get('title')
+        description = article.get('description') # Use description field for snippet
         url = article.get('url')
-        snippet = article.get('description')
-        body = article.get('content') # NewsAPI often truncates content
+        url_to_image = article.get('urlToImage') # Get urlToImage
+        content = article.get('content') # NewsAPI often truncates content
+        author = article.get('author') # Get author
 
         # Basic validation
         if not news_id or not url or not published_dt:
@@ -197,13 +203,16 @@ def store_clean_news_data(articles: List[Dict[str, Any]], con: duckdb.DuckDBPyCo
 
         data_to_insert.append((
             news_id,
+            None, # asset_id - to be filled later by ER if needed
             f"newsapi:{source_name}", # Prefix source for clarity
-            published_dt,
-            now_ts,
+            author,
             title,
+            description,
             url,
-            snippet,
-            body
+            url_to_image,
+            published_dt,
+            content,
+            now_ts
         ))
         processed_count += 1
 
@@ -220,17 +229,19 @@ def store_clean_news_data(articles: List[Dict[str, Any]], con: duckdb.DuckDBPyCo
 
 async def ingest_newsapi_headlines(
     query: str,
-    max_articles: int = 100, # Total articles to fetch
-    con: duckdb.DuckDBPyConnection = None,
-    days_back: int = 7 # How many days back to search (max ~30 for free plan)
+    max_articles: int = 100, # Total articles to fetch (keeping default 100 as it's max per page)
+    db_path: str = config.DB_PATH, # Accept db_path, default to config
+    days_back: int = 30 # Default to 30 days back to capture last month (max ~30 for free plan)
+    # Removed con: duckdb.DuckDBPyConnection = None - manage connection internally based on db_path
 ):
     """
-    High-level function to fetch news headlines for a query, store raw and clean data.
+    High-level function to fetch recent news headlines (last 'days_back' days)
+    for a query, store raw and clean data in the specified database.
 
     Args:
         query: The search query.
         max_articles: The maximum number of articles to fetch across all pages.
-        con: Optional DuckDB connection.
+        db_path: Path to the DuckDB database file.
         days_back: How many days of history to include in the search.
     """
     if not query:
@@ -240,10 +251,14 @@ async def ingest_newsapi_headlines(
         logger.error("NEWSAPI_API_KEY not set. Aborting NewsAPI ingestion.")
         return
 
-    close_conn_locally = False
-    if con is None:
-        con = db.get_db_connection()
-        close_conn_locally = True
+    # Manage connection based on db_path
+    con = None
+    try:
+        logger.debug(f"NewsAPI: Connecting to DB at {db_path}")
+        con = db.get_db_connection(db_path=db_path) # Use provided db_path
+    except Exception as e:
+        logger.error(f"NewsAPI: Failed to connect to database at {db_path}: {e}")
+        return # Cannot proceed without DB connection
 
     total_raw_stored = 0
     total_clean_stored = 0
@@ -305,8 +320,9 @@ async def ingest_newsapi_headlines(
     finally:
         end_time = time.time()
         logger.info(f"NewsAPI ingestion finished for query '{query}' in {end_time - start_time:.2f}s. Fetched: {fetched_articles_count}, Stored: {total_raw_stored} raw, {total_clean_stored} clean.")
-        if close_conn_locally:
-            db.close_db_connection()
+        # Close the connection managed within this function
+        if con:
+            db.close_db_connection(con)
 
 
 if __name__ == "__main__":
@@ -314,12 +330,16 @@ if __name__ == "__main__":
     example_query = "Tesla OR Elon Musk"
     max_results_to_fetch = 20 # Fetch fewer for example run
 
+    # Example requires db_path now
+    db_file_path = config.DB_PATH
     # Make sure the DB schema exists first
+    temp_conn = None
     try:
-        conn = db.get_db_connection()
-        db.create_schema(conn)
-        asyncio.run(ingest_newsapi_headlines(example_query, max_articles=max_results_to_fetch, con=conn))
+        temp_conn = db.get_db_connection(db_path=db_file_path)
+        db.create_schema(temp_conn)
+        asyncio.run(ingest_newsapi_headlines(example_query, max_articles=max_results_to_fetch, db_path=db_file_path))
     except Exception as e:
         logger.error(f"Main execution error: {e}")
     finally:
-        db.close_db_connection()
+        if temp_conn:
+            db.close_db_connection(temp_conn) # Close the temp connection

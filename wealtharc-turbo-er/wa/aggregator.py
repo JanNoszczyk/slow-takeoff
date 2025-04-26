@@ -13,6 +13,8 @@ from .ingest.google_trends import ingest_google_trends
 from .ingest.wikimedia import ingest_wikipedia_for_query # Correct function name
 from .ingest.gdelt import ingest_latest_gdelt_mentions # Correct function name
 from .ingest.stocktwits import ingest_stocktwits_symbol
+from .ingest.newsapi import ingest_newsapi_headlines # <-- Import NewsAPI ingestor
+
 # Add other ingestors here if needed
 
 async def run_single_ingestor(ingest_coro: Coroutine, name: str) -> Tuple[str, bool, Any]:
@@ -88,6 +90,10 @@ async def run_all_ingestors(
     tasks.append(run_single_ingestor(ingest_wikipedia_for_query(query=name_to_use, db_path=db_path), "Wikimedia"))
     tasks.append(run_single_ingestor(ingest_latest_gdelt_mentions(keyword_filter=[name_to_use], db_path=db_path), "GDELT"))
     tasks.append(run_single_ingestor(ingest_stocktwits_symbol(symbol=symbol_to_use, limit=limit_per_source, db_path=db_path), "StockTwits"))
+    # Add NewsAPI task - it needs the db_path passed correctly now (will require modification in newsapi.py later if not already done)
+    # We pass name_to_use as the query, and use the default max_articles (100) and days_back (30)
+    tasks.append(run_single_ingestor(ingest_newsapi_headlines(query=name_to_use, max_articles=limit_per_source, db_path=db_path), "NewsAPI"))
+
 
     logger.info(f"Running {len(tasks)} ingestion tasks in parallel...")
     results: List[Tuple[str, bool, Any]] = await asyncio.gather(*tasks)

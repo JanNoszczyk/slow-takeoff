@@ -99,7 +99,7 @@ You can configure the service by editing the `.env` file.  Available options are
 #### OpenAI
 
 - `OPENAI_API_KEY`: Your OpenAI API key.
-- `OPENAI_MODEL_ID`: The model to use (e.g., `gpt-4o`).
+- `OPENAI_MODEL_ID`: The model to use (e.g.,).
 - `OPENAI_BASE_URL`: Optional custom endpoint for OpenAI compatible APIs.
 
 #### Anthropic
