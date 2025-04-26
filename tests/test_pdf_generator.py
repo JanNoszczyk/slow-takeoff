@@ -1,6 +1,6 @@
 import os
 import pytest
-from pdf_report.components import (
+from shared.pdf_report.components import (
     PDFDocument,
     TextComponent,
     TableComponent,
@@ -9,7 +9,7 @@ from pdf_report.components import (
     TableColumn,
     TextAlignment,
 )
-from pdf_report.generator import generate_pdf
+from shared.pdf_report.generator import generate_pdf
 
 # Define the output directory for test PDFs
 OUTPUT_DIR = "outputs"

@@ -42,20 +42,26 @@ const stats = [
 ];
 
 const StatsSummary: React.FC = () => (
-  <section className="w-full flex flex-col sm:flex-row gap-6 justify-center items-center mb-12">
-    {stats.map((stat, idx) => (
-      <div
-        key={stat.label}
-        className={`flex items-center gap-3 px-6 py-4 rounded-xl shadow-sm transition-transform hover:scale-105 ${stat.color}`}
-        style={{ minWidth: 220 }}
-      >
-        <div>{stat.icon}</div>
-        <div>
-          <div className="text-2xl font-bold">{stat.value}</div>
-          <div className="text-sm font-medium opacity-80">{stat.label}</div>
+  <section className="w-full flex justify-center items-center mb-12">
+    <div className="w-full max-w-2xl">
+      <div className="overflow-hidden rounded-2xl shadow border border-gray-200">
+        <div className="min-w-full divide-y divide-gray-200 bg-white">
+          {stats.map((stat, idx) => (
+            <div
+              key={stat.label}
+              className={`flex items-center gap-4 px-6 py-4 ${idx % 2 === 0 ? "bg-gray-50" : "bg-white"} hover:bg-blue-50 transition`}
+              style={{ minWidth: 220 }}
+            >
+              <div className="flex-shrink-0">{stat.icon}</div>
+              <div className="flex-1">
+                <div className="text-xl font-bold text-gray-900">{stat.value}</div>
+                <div className="text-sm font-medium text-gray-500">{stat.label}</div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
-    ))}
+    </div>
   </section>
 );
 
