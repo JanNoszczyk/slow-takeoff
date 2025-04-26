@@ -13,36 +13,26 @@ import json
 from ..db import USPTO_PATENTS_TABLE, get_db_connection
 
 # USPTO API Details
-# Using the Patent Public Search API (PPUBS)
 USPTO_PPUBS_API_URL = "https://ppubs.uspto.gov/api/v1/search/results"
-# API_KEY = settings.USPTO_API_KEY # PPUBS Search API doesn't seem to require one currently
 
-# Define table names (using constants from db.py now)
+# Define table names
 RAW_USPTO_TABLE = "raw_uspto" # For raw JSON payload
-USPTO_PATENTS_TABLE = "uspto_patents"
+# USPTO_PATENTS_TABLE = "uspto_patents" # Now imported
 
 # --- API Client Setup ---
 
 async def make_uspto_ppubs_search_request(query_payload: dict) -> dict | None:
     """Makes a POST request to the USPTO PPUBS Search API."""
     url = USPTO_PPUBS_API_URL
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-    }
-    # No API key seems needed for this specific API endpoint currently
-    # if API_KEY:
-    #     headers["X-API-Key"] = API_KEY # Example header name
-
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
     async with httpx.AsyncClient() as client:
         try:
             logger.debug(f"Making USPTO PPUBS search request to {url} with payload: {json.dumps(query_payload)}")
-            response = await client.post(url, json=query_payload, headers=headers, timeout=120.0) # Longer timeout for search
+            response = await client.post(url, json=query_payload, headers=headers, timeout=120.0)
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error searching USPTO PPUBS {url}: {e.response.status_code} - {e.request.url} - Response: {e.response.text}")
-            # Handle specific errors like 400 (bad query), 429 (rate limit)
             return None
         except Exception as e:
             logger.error(f"Unexpected error searching USPTO PPUBS {url}: {e}")
@@ -52,74 +42,31 @@ async def make_uspto_ppubs_search_request(query_payload: dict) -> dict | None:
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
 async def search_uspto_patents(assignee_name: str, limit: int = 20) -> list[dict]:
-    """
-    Searches USPTO patents by assignee name (Placeholder implementation).
-
-    Args:
-        assignee_name: Name of the company/assignee.
-        limit: Max number of results.
-
-    Returns:
-        A list of patent data dictionaries or an empty list.
-    """
-    logger.info(f"Searching USPTO patents for assignee: '{assignee_name}'")
-    # Placeholder: This requires knowing the correct API endpoint and query parameters
-    # Example using a hypothetical search endpoint:
-    # params = {"assignee": assignee_name, "limit": limit, "sort": "date_desc"}
-    # data = await make_uspto_request("search", params=params)
-
-    # Removed Mock implementation block
-
-    """
-    Searches USPTO patents by assignee name using the PPUBS API.
-
-    Args:
-        assignee_name: Name of the company/assignee.
-        limit: Max number of results.
-
-    Returns:
-        A list of patent data dictionaries or an empty list.
-    """
+    """Searches USPTO patents by assignee name using the PPUBS API."""
     logger.info(f"Searching USPTO PPUBS for assignee: '{assignee_name}', limit: {limit}")
-
     query_payload = {
         "query": {
-            "querySyntax": "proximity", # Or "standard" if preferred/needed
-            "operator": "AND",
-            "searchFields": [
-                {
-                    "field": "assigneeName", # Field for assignee name search
-                    "values": [assignee_name]
-                }
-            ]
+            "querySyntax": "proximity", "operator": "AND",
+            "searchFields": [{"field": "assigneeName", "values": [assignee_name]}]
         },
-        "start": 0,
-        "rows": limit,
-        "sort": "publicationDate desc" # Sort by publication date descending
-        # Consider adding filters for patent type (e.g., utility) if needed
+        "start": 0, "rows": limit, "sort": "publicationDate desc"
     }
-
     data = await make_uspto_ppubs_search_request(query_payload)
 
     if data and 'results' in data and 'patents' in data['results']:
         raw_patents = data['results']['patents']
         logger.success(f"Found {len(raw_patents)} patents for {assignee_name} via PPUBS API.")
-        # Adapt the raw API response structure to the expected format
         processed_patents = []
         for p in raw_patents:
-            # Extract relevant fields - adjust based on actual API response structure!
-            # Example extraction - VERIFY FIELD NAMES FROM ACTUAL API RESPONSE
             patent_details = p.get('patent', {})
             application_details = p.get('patentApplication', {})
-
             processed_patents.append({
-                "patentNumber": patent_details.get('patentNumber', application_details.get('patentNumber')), # Prefer patent number if available
+                "patentNumber": patent_details.get('patentNumber', application_details.get('patentNumber')),
                 "patentTitle": patent_details.get('inventionTitle', {}).get('content', [''])[0],
                 "filingDate": application_details.get('filingDate'),
-                "grantDate": patent_details.get('grantDate'), # May be called publicationDate or similar
-                "assigneeEntityName": patent_details.get('assigneeEntityName', {}).get('content', [assignee_name])[0], # Use original name if not found
+                "grantDate": patent_details.get('grantDate'),
+                "assigneeEntityName": patent_details.get('assigneeEntityName', {}).get('content', [assignee_name])[0],
                 "abstract": patent_details.get('abstractText', {}).get('content', [''])[0],
-                # Add other fields as needed/available, e.g., inventors, classifications
             })
         return processed_patents
     elif data and 'results' in data and not data['results'].get('patents'):
@@ -131,87 +78,91 @@ async def search_uspto_patents(assignee_name: str, limit: int = 20) -> list[dict
 
 # --- Database Storage Functions ---
 
-async def store_uspto_patent_data(patents: list[dict], con: duckdb.DuckDBPyConnection):
+async def store_uspto_patent_data(patents: list[dict], db_path: str | None = None):
     """Stores cleaned USPTO patent metadata."""
     if not patents: return
-
     logger.info(f"Storing metadata for {len(patents)} USPTO patents...")
     fetched_at = datetime.now(timezone.utc)
     records_to_insert = []
-
     for patent in patents:
-        # Parse dates safely
         filing_date = pd.to_datetime(patent.get('filingDate'), errors='coerce').date()
         grant_date = pd.to_datetime(patent.get('grantDate'), errors='coerce').date()
-
         record = (
-            patent.get('patentNumber'),
-            patent.get('patentTitle'),
-            patent.get('assigneeEntityName'),
-            filing_date,
-            grant_date,
-            fetched_at,
-            patent.get('abstract') # Add abstract if extracted
+            patent.get('patentNumber'), patent.get('patentTitle'), patent.get('assigneeEntityName'),
+            filing_date, grant_date, fetched_at, patent.get('abstract')
         )
-        records_to_insert.append(record)
+        # Basic validation
+        if record[0]:
+            records_to_insert.append(record)
+        else:
+            logger.warning(f"Skipping USPTO record due to missing patent number: {patent}")
+
+    if not records_to_insert:
+        logger.info("No valid USPTO records to store.")
+        return
 
     try:
-        con.executemany(
-            f"""
-            INSERT INTO {USPTO_PATENTS_TABLE} (
-                patent_number, title, assignee, filing_date, grant_date, fetched_at, abstract
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(patent_number) DO UPDATE SET
-                title = excluded.title,
-                assignee = excluded.assignee,
-                filing_date = excluded.filing_date,
-                grant_date = excluded.grant_date,
-                fetched_at = excluded.fetched_at,
-                abstract = excluded.abstract;
-            """,
-            records_to_insert
-        )
-        logger.success(f"Successfully stored/updated metadata for {len(records_to_insert)} USPTO patents.")
+        def db_operations_in_thread(path: str | None, data: list):
+            conn = None
+            try:
+                conn = get_db_connection(path)
+                conn.executemany(
+                    f"""
+                    INSERT INTO {USPTO_PATENTS_TABLE} (
+                        patent_number, title, assignee, filing_date, grant_date, fetched_at, abstract
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(patent_number) DO UPDATE SET
+                        title=excluded.title, assignee=excluded.assignee, filing_date=excluded.filing_date,
+                        grant_date=excluded.grant_date, fetched_at=excluded.fetched_at, abstract=excluded.abstract;
+                    """, data
+                )
+                logger.success(f"Thread successfully stored/updated metadata for {len(data)} USPTO patents.")
+            except Exception as thread_e:
+                logger.error(f"Error in thread storing USPTO patent metadata: {thread_e}")
+                raise
+            finally:
+                if conn: conn.close(); logger.debug("Thread closed USPTO patent data DB connection.")
+
+        await asyncio.to_thread(db_operations_in_thread, db_path, records_to_insert)
+
     except Exception as e:
-        logger.error(f"Error storing USPTO patent metadata: {e}")
+        logger.error(f"Error storing USPTO patent metadata: {e}"); raise
 
 
 # --- Main Ingestion Function ---
 
-async def ingest_uspto_patents(assignee_name: str, limit: int = 20, con: duckdb.DuckDBPyConnection | None = None):
+async def ingest_uspto_patents(assignee_name: str, limit: int = 20, db_path: str | None = None):
     """Searches for and stores USPTO patent metadata for an assignee."""
     logger.info(f"Starting USPTO patent ingestion for assignee: {assignee_name}")
-    conn_local = con or get_db_connection()
-
     try:
         patents_data = await search_uspto_patents(assignee_name, limit=limit)
-
         if patents_data:
-            await store_uspto_patent_data(patents_data, con=conn_local)
+             try:
+                 await store_uspto_patent_data(patents_data, db_path=db_path)
+             except Exception as store_e:
+                  logger.error(f"Failed to store USPTO patent data: {store_e}", exc_info=True)
         else:
             logger.info(f"No patents found or processed for assignee '{assignee_name}'.")
-
     except Exception as e:
         logger.exception(f"Error during USPTO ingestion pipeline for {assignee_name}: {e}")
-    finally:
-        if not con and conn_local:
-            conn_local.close()
+        raise # Re-raise
 
 
 # Example Usage
 async def main():
     test_assignee = "Apple Inc."
-    conn = get_db_connection()
+    test_db_path = "test_uspto.db"
+    conn = None
     try:
+        conn = get_db_connection(test_db_path)
         from .. import db
-        db.create_schema(conn) # Ensure schema exists
-        await ingest_uspto_patents(test_assignee, limit=10, con=conn)
+        db.create_schema(conn); conn.close(); conn = None
+        await ingest_uspto_patents(test_assignee, limit=10, db_path=test_db_path)
+    except Exception as e: logger.exception(f"USPTO example failed: {e}")
     finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
+        import os
+        if os.path.exists(test_db_path): os.remove(test_db_path); logger.info(f"Cleaned up {test_db_path}")
 
 if __name__ == "__main__":
-    # API Key check might be needed depending on the final API used
-    # if not API_KEY:
-    #     print("USPTO_API_KEY might be required. Please check configuration.")
     asyncio.run(main())
