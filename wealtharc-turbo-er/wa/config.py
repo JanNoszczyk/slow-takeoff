@@ -30,6 +30,7 @@ QUANDL_API_KEY = os.getenv("QUANDL_API_KEY")
 ESG_BOOK_API_KEY = os.getenv("ESG_BOOK_API_KEY") # Or use token-based auth
 NEWSAPI_API_KEY = os.getenv("NEWSAPI_API_KEY")
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN") # Twitter API v2
+STOCKTWITS_API_KEY = os.getenv("STOCKTWITS_API_KEY") # May not be required for all endpoints
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
 REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "WealthArcTurboER/0.1 by Cline")
