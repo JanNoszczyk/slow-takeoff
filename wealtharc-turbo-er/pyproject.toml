@@ -1,0 +1,36 @@
+[project]
+name = "wealtharc-turbo-er"
+version = "0.1.0"
+description = "Data harvesting and entity resolution for WealthArc assets"
+authors = [
+    {name = "Cline"}
+]
+readme = "README.md"
+requires-python = "^3.11"
+dependencies = [
+    "python-dotenv (>=1.1.0,<2.0.0)",
+    "duckdb (>=1.2.2,<2.0.0)",
+    "httpx (>=0.28.1,<0.29.0)",
+    "httpx[http2] (>=0.28.1,<0.29.0)",
+    "httpx[brotli] (>=0.28.1,<0.29.0)",
+    "streamlit (>=1.44.1,<2.0.0)",
+    "jupyter (>=1.1.1,<2.0.0)",
+    "pandas (>=2.2.3,<3.0.0)",
+    "openai (>=1.76.0,<2.0.0)",
+    "async-lru (>=2.0.5,<3.0.0)",
+    "tenacity (>=9.1.2,<10.0.0)",
+    "loguru (>=0.7.3,<0.8.0)",
+    "tqdm (>=4.67.1,<5.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.5"
+ruff = "^0.11.7"
+mypy = "^1.15.0"
+ipykernel = "^6.29.5"
+
