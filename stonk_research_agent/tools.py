@@ -6,7 +6,8 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Literal
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, HttpUrl, ValidationError # Added Pydantic types and ValidationError
+# Use field_validator from Pydantic v2 for custom validation
+from pydantic import BaseModel, Field, HttpUrl, ValidationError, field_validator
 # Removed OpenAI client import as it's no longer used for parsing here
 
 # Import Agent SDK components
@@ -207,6 +208,7 @@ def _internal_get_newsapi_headlines(query: str, count: int) -> List[Dict[str, An
 def _internal_perform_web_search(query: str) -> Dict[str, Any]:
     """
     Simulates performing a web search and manually structures the results.
+    NOTE: This is currently a simulation. Replace with actual search logic.
     """
     print(f"Logic: Simulating _internal_perform_web_search for query: '{query}'")
     # Simulate finding some results - replace with actual search/parsing logic
@@ -256,21 +258,64 @@ class NewsApiHeadlinesData(BaseModel):
     articles: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
 
+# Updated WebSearch Pydantic models for stock impact analysis
 class WebSearchNewsArticle(BaseModel):
-    headline: str = Field(..., description="Title of the news article.")
+    headline: Optional[str] = Field(None, description="Title of the news article (if available).")
     source_name: Optional[str] = Field(None, description="Name of the news source.")
-    source_url: HttpUrl = Field(..., description="URL of the news source.")
-    summary: Optional[str] = Field(None, description="Brief summary of the article content.")
+    source_url: str = Field(..., description="URL of the news source. Must be a valid URL string.") # Changed from HttpUrl to str
+    summary: Optional[str] = Field(None, description="Original brief summary from search result (if available).")
     publish_date: Optional[str] = Field(None, description="Publication date/time (ISO format or human-readable).")
+    reason: Optional[str] = Field(None, description="Short (1-2 sentence) explanation of why this news might affect the stock price.")
+    transcript: Optional[str] = Field(None, description="Relevant excerpt/transcript from the source supporting the reason.")
+    # Removed ge=-1.0, le=1.0 constraints
+    sentiment_score: Optional[float] = Field(None, description="Sentiment score indicating potential stock price impact (-1.0 negative to +1.0 positive).")
+
+    @field_validator('source_url')
+    @classmethod
+    def check_url(cls, v: str) -> str:
+        # Use Pydantic's HttpUrl internally for validation after receiving the string
+        try:
+            HttpUrl(v) # This will raise ValidationError if invalid
+            return v
+        except ValidationError:
+            raise ValueError(f"Invalid URL format: {v}")
+
+    @field_validator('sentiment_score')
+    @classmethod
+    def check_sentiment_score_range(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and not (-1.0 <= v <= 1.0):
+            raise ValueError(f"Sentiment score {v} is outside the valid range [-1.0, 1.0]")
+        return v
 
 class WebSearchOutput(BaseModel):
-    query: str = Field(..., description="The original search query performed.")
-    overall_summary: str = Field(..., description="A synthesized summary paragraph of the key findings.")
-    sentiment: Optional[Literal["Positive", "Negative", "Neutral", "Mixed"]] = Field(None, description="Overall sentiment detected.")
-    sentiment_reasoning: Optional[str] = Field(None, description="Brief explanation for the detected sentiment.")
-    relevant_news: List[WebSearchNewsArticle] = Field(default_factory=list, description="List of relevant news articles found.")
-    key_source_urls: List[HttpUrl] = Field(default_factory=list, description="List of important source URLs.")
+    query: Optional[str] = Field(None, description="The original search query performed (if available).")
+    overall_summary: Optional[str] = Field(None, description="Synthesized summary, now potentially derived from parsing agent output.") # Modified description
+    # Removed overall sentiment fields, now per-article
+    relevant_news: List[WebSearchNewsArticle] = Field(default_factory=list, description="List of relevant news articles analyzed for stock price impact.")
+    key_source_urls: List[HttpUrl] = Field(default_factory=list, description="List of important source URLs.") # Keep this for quick reference
     error: Optional[str] = None # To capture potential errors during web search/parsing
+
+# NEW: Simplified model for agent's direct output
+class WebAnalysisOutput(BaseModel):
+    overall_summary: Optional[str] = Field(None, description="Synthesized summary of web search findings related to price impact.")
+    relevant_news: List[WebSearchNewsArticle] = Field(default_factory=list, description="List of relevant news articles analyzed for stock price impact.")
+    key_source_urls: List[str] = Field(default_factory=list, description="List of important source URLs (as strings).") # Changed from List[HttpUrl]
+    error: Optional[str] = None # To capture potential errors during web search/parsing
+
+    @field_validator('key_source_urls', mode='before') # Validate before Pydantic tries to coerce type
+    @classmethod
+    def check_key_urls(cls, v: List[str]) -> List[str]:
+        if not isinstance(v, list):
+             # This case might not be strictly necessary with mode='before' but good practice
+             raise ValueError("key_source_urls must be a list")
+        validated_urls = []
+        for i, url_str in enumerate(v):
+            try:
+                HttpUrl(url_str) # Validate using HttpUrl internally
+                validated_urls.append(url_str)
+            except ValidationError:
+                raise ValueError(f"Invalid URL format in key_source_urls at index {i}: {url_str}")
+        return validated_urls
 
 class SymbolResearchData(BaseModel):
     symbol: str
@@ -280,23 +325,22 @@ class SymbolResearchData(BaseModel):
     alphavantage_overview: Optional[AlphavantageOverviewData] = None
     fred_series: Dict[str, FredSeriesData] = Field(default_factory=dict) # Keyed by series_id
     eia_series: Dict[str, EiaSeriesData] = Field(default_factory=dict)   # Keyed by series_id
-    web_search: Optional[WebSearchOutput] = None # CORRECT: Optional, default None
+    # Ensure web_search defaults to an empty WebSearchOutput object instead of None
+    web_search: WebSearchOutput = Field(default_factory=WebSearchOutput) # Keep this structure for the final combined report
 
 class FullResearchReport(BaseModel):
+    # Removed strict config model_config = {'strict': True}
     report: List[SymbolResearchData] = Field(default_factory=list)
 
-# Update forward reference for SymbolResearchData
-# Ensure this is done *after* WebSearchOutput is defined
-print("DEBUG: Attempting SymbolResearchData.model_rebuild()")
-try:
-    SymbolResearchData.model_rebuild()
-    print("DEBUG: SymbolResearchData.model_rebuild() successful.")
-except Exception as e:
-    print(f"DEBUG: ERROR during SymbolResearchData.model_rebuild(): {e}")
-    import traceback
-    traceback.print_exc()
-# Removed the duplicate model definition block that was here
-
+# Remove explicit model_rebuild call, as default_factory should handle initialization correctly.
+# print("DEBUG: Attempting SymbolResearchData.model_rebuild() after modifying WebSearchOutput field.")
+# try:
+#     SymbolResearchData.model_rebuild()
+#     print("DEBUG: SymbolResearchData.model_rebuild() successful.")
+# except AttributeError:
+#     print("DEBUG: model_rebuild not needed or available (likely Pydantic v1 or automatic handling).")
+# except Exception as e:
+#     print(f"DEBUG: ERROR during SymbolResearchData.model_rebuild(): {e}")
 
 # --- Tool Implementations (Decorated Wrappers) ---
 
@@ -335,7 +379,8 @@ def get_newsapi_headlines(query: str, count: int) -> List[Dict[str, Any]]:
 def run_full_research(symbols: List[str], news_count: int, fred_series: Optional[List[str]] = None, eia_series: Optional[List[str]] = None) -> str:
     """
     Runs research jobs for a list of stock symbols. Fetches quote, news (Finnhub, NewsAPI),
-    overview, simulated web search, and specified FRED/EIA data. Returns aggregated results as JSON.
+    overview, and specified FRED/EIA data. Returns aggregated results as JSON.
+    Web search is handled separately by the agent.
 
     Args:
         symbols: List of stock ticker symbols (e.g., ["AAPL", "MSFT"]).
@@ -354,7 +399,7 @@ def run_full_research(symbols: List[str], news_count: int, fred_series: Optional
 
     for symbol in symbols:
         print(f"DEBUG: Processing symbol: {symbol}")
-        # Instantiate the Pydantic model - web_search is Optional, no error here
+        # Instantiate the Pydantic model
         symbol_data = SymbolResearchData(symbol=symbol)
         print(f"DEBUG: SymbolResearchData instantiated successfully for {symbol}")
 
@@ -375,9 +420,9 @@ def run_full_research(symbols: List[str], news_count: int, fred_series: Optional
         overview_result = _internal_get_alphavantage_overview(symbol=symbol)
         print(f"DEBUG: _internal_get_alphavantage_overview result: {str(overview_result)[:100]}...")
 
+        # Call the internal (simulated) web search function
         print(f"DEBUG: Calling _internal_perform_web_search for {symbol}")
-        web_search_result_dict = _internal_perform_web_search(query=symbol) # Gets the dict
-        print(f"DEBUG: _internal_perform_web_search result: {str(web_search_result_dict)[:100]}...")
+        # Removed call to _internal_perform_web_search
 
         fred_results = {}
         print(f"DEBUG: Processing FRED series: {fred_series}")
@@ -400,7 +445,13 @@ def run_full_research(symbols: List[str], news_count: int, fred_series: Optional
         else: symbol_data.finnhub_news = FinnhubNewsData(**fhub_news_result)
         if isinstance(napi_news_result, list): symbol_data.newsapi_headlines = NewsApiHeadlinesData(articles=napi_news_result)
         else: symbol_data.newsapi_headlines = NewsApiHeadlinesData(**napi_news_result)
-        symbol_data.alphavantage_overview = AlphavantageOverviewData(**overview_result)
+        # Conditionally populate AlphaVantage data
+        if overview_result and "error" in overview_result:
+            symbol_data.alphavantage_overview = None # Assign None if there's an error
+            print(f"DEBUG: AlphaVantage error found for {symbol}, setting overview to None.")
+        else:
+            symbol_data.alphavantage_overview = AlphavantageOverviewData(**overview_result)
+            print(f"DEBUG: AlphaVantage data populated successfully for {symbol}.")
 
         for series_id, result in fred_results.items():
             if "error" in result: symbol_data.fred_series[series_id] = FredSeriesData(error=result["error"])
@@ -409,17 +460,7 @@ def run_full_research(symbols: List[str], news_count: int, fred_series: Optional
             if "error" in result: symbol_data.eia_series[series_id] = EiaSeriesData(error=result["error"])
             else: symbol_data.eia_series[series_id] = EiaSeriesData(data=result)
 
-        # Populate web_search safely
-        try:
-            symbol_data.web_search = WebSearchOutput(**web_search_result_dict)
-            if symbol_data.web_search.error:
-                 print(f"Note: Web search for {symbol} completed but reported an internal error: {symbol_data.web_search.error}")
-        except ValidationError as e:
-             print(f"Validation Error creating WebSearchOutput for {symbol}: {e}")
-             symbol_data.web_search = WebSearchOutput(query=symbol, overall_summary="Failed web search validation.", error=f"Validation Error: {e}")
-        except Exception as e:
-             print(f"Unexpected Error creating WebSearchOutput for {symbol}: {e}")
-             symbol_data.web_search = WebSearchOutput(query=symbol, overall_summary="Unexpected error processing web search.", error=f"Unexpected Error: {e}")
+        # Web search population removed
 
         report_data.append(symbol_data)
 
@@ -465,10 +506,7 @@ if __name__ == '__main__':
         try: print(json.dumps(_internal_get_newsapi_headlines(query=query, count=news_api_count), indent=2))
         except Exception as e: print(f"Error: {e}")
 
-        print(f"\n--- _internal_perform_web_search ({symbol}) ---")
-        try: print(json.dumps(_internal_perform_web_search(query=symbol), indent=2))
-        except Exception as e: print(f"Error: {e}")
-
+        # Removed web search test section
         print(f"\n--- run_full_research test skipped (requires agent Runner) ---")
 
     try:

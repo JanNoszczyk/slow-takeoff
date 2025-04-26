@@ -1,49 +1,40 @@
 import os
 import asyncio
 import json
+from typing import Optional, Any
 from dotenv import load_dotenv
 
 # Import Agent SDK components
 try:
-    # Try importing specific item types first
-    from agents.items import ToolCallOutputItem
-    from agents import Agent, Runner, WebSearchTool
-    print("DEBUG: Successfully imported Agent SDK components including ToolCallOutputItem.")
-except ImportError:
-    # Fallback if ToolCallOutputItem is not directly available (older version?)
-    print("WARNING: Could not import ToolCallOutputItem directly. Will rely on generic item checking.")
-    try:
-        from agents import Agent, Runner, WebSearchTool, FunctionToolResult
-        ToolCallOutputItem = None # Indicate it's not available
-        print("DEBUG: Imported Agent SDK components using FunctionToolResult fallback.")
-    except ImportError:
-        print("ERROR: Failed to import 'agents' library components. Make sure 'openai-agents' is installed.")
-        # Define dummy classes if import fails
-        class Agent:
-            pass
-        class Runner:
-            pass
-        class WebSearchTool:
-            def __init__(self, **kwargs):
-                pass
-        # Define dummy types/vars used later
-        ToolCallOutputItem = None
-        FunctionToolResult = None
+    import agents # Try base import first
+    print("DEBUG: Successfully imported base 'agents' package.")
+    from agents.items import ToolCallOutputItem, MessageOutputItem
+    from agents import Agent, Runner, WebSearchTool, FunctionToolResult, ItemHelpers # Added ItemHelpers
+    print("DEBUG: Successfully imported specific Agent SDK components.")
+except ImportError as e:
+    print(f"ERROR: Failed to import 'agents' library components: {e}")
+    # Define fallbacks if import fails
+    class Agent: pass
+    class Runner: pass
+    class WebSearchTool:
+        def __init__(self, **kwargs): pass
+    ToolCallOutputItem = None
+    MessageOutputItem = None
+    FunctionToolResult = None
 
-# Import the newly created tools
+# Import tools and Pydantic models
 try:
-    from .tools import (
-        get_yahoo_quote,
-        get_finnhub_news,
-        get_alphavantage_overview,
-        get_fred_series,
-        get_eia_series,
-        get_newsapi_headlines,
-        run_full_research
+    from tools import (
+        get_yahoo_quote, get_finnhub_news, get_alphavantage_overview,
+        get_fred_series, get_eia_series, get_newsapi_headlines, run_full_research
     )
+    # Import the main report structure and the new analysis-specific structure
+    from tools import FullResearchReport, SymbolResearchData, WebSearchOutput, WebSearchNewsArticle, WebAnalysisOutput
+    from pydantic import ValidationError, Field, HttpUrl
+    print("DEBUG: Tools and Pydantic models imported successfully.")
 except ImportError:
-     print("ERROR: Failed to import tools from stonk_research_agent.tools. Make sure the file exists and is correct.")
-     # Define dummy functions
+     print("ERROR: Failed to import tools or Pydantic models from tools.py.")
+     # Define fallbacks
      def get_yahoo_quote(**kwargs): return {"error": "Tool import failed"}
      def get_finnhub_news(**kwargs): return {"error": "Tool import failed"}
      def get_alphavantage_overview(**kwargs): return {"error": "Tool import failed"}
@@ -51,161 +42,231 @@ except ImportError:
      def get_eia_series(**kwargs): return {"error": "Tool import failed"}
      def get_newsapi_headlines(**kwargs): return {"error": "Tool import failed"}
      def run_full_research(**kwargs): return '{"error": "Tool import failed"}'
+     FullResearchReport = None
+     SymbolResearchData = None
+     WebSearchOutput = None # Still needed for the final merged report structure
+     WebSearchNewsArticle = None
+     WebAnalysisOutput = None # The agent's direct output type
+     ValidationError = None
+     Field = None
+     HttpUrl = None
 
-
-# Load environment variables (primarily for OPENAI_API_KEY, tools load their own)
+# Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL_ID = os.getenv("OPENAI_MODEL_ID")
 
-# --- Agent Definition ---
-
+# --- Agent Definition (Updated Instructions & NEW output_type) ---
 STONK_RESEARCH_INSTRUCTIONS = """
-You are the Stonk Research Agent, a specialized financial research assistant. Your goal is to synthesize comprehensive information efficiently using structured data tools and web search.
+You are the Stonk Research Agent, a specialized financial research assistant. Your goal is to use tools to find information and then specifically analyze web search results for stock price impact, returning ONLY a structured `WebAnalysisOutput` object.
 
 **Core Principles:**
-1.  **Structured Data First:** For ANY request mentioning a specific company name or ticker symbol (e.g., "Apple", "MSFT", "NVIDIA", "NVDA"), you **MUST** use the `run_full_research` tool as your FIRST step to gather core quote, news, and overview data. No exceptions.
-2.  **Web Search for Context:** AFTER using `run_full_research`, you **MUST** also use the `WebSearchTool` to supplement the structured data. Search for recent events, analysis, sentiment, market context, or qualitative information not captured by the specific APIs.
-3.  **Synthesize:** Combine insights from both `run_full_research` (structured JSON) and `WebSearchTool` (web results) into a cohesive final answer.
-4.  **Label Sources:** Clearly indicate the source for each piece of information (e.g., "Quote (via run_full_research/Yahoo)", "Recent Analysis (via WebSearchTool)").
+1.  **Structured Data First:** For ANY request mentioning a specific company name or ticker symbol (e.g., "Apple", "MSFT", "NVIDIA", "NVDA"), you **MUST** use the `run_full_research` tool as your FIRST step. You will use the data provided by this tool implicitly in your analysis, but you will NOT include it directly in your final output object.
+2.  **Web Search for Price Impact:** AFTER `run_full_research` completes, you **MUST** use the `WebSearchTool`. Focus on finding **recent news, events, or analysis that could potentially impact the stock price**.
+3.  **Analyze and Populate `WebAnalysisOutput`:** Analyze the results from `WebSearchTool`. For the **top 5 most relevant** web sources found that discuss potential price impact, create a `WebSearchNewsArticle` object containing `headline`, `reason`, `transcript`, `sentiment_score`, and `source_url`.
+4.  **Return ONLY `WebAnalysisOutput`:** Your SOLE task after running the tools and performing analysis is to construct and return a `WebAnalysisOutput` object. This object should contain:
+    *   `overall_summary`: Your synthesized text summary of the **top 5** web search findings regarding price impact.
+    *   `relevant_news`: A list of the `WebSearchNewsArticle` objects you created (limited to the **top 5** most relevant).
+    *   `key_source_urls`: A list of the source URLs from the **top 5** relevant news articles.
+    *   `error`: Any error message if the web search or analysis failed.
+    You MUST return ONLY this `WebAnalysisOutput` object. Do NOT return the full `FullResearchReport`.
 
 **Available Tools:**
-- `run_full_research`: **(Primary for Structured Company Data)** Gathers quote, news (Finnhub, NewsAPI), and overview data for a stock symbol. Returns structured JSON. Use this FIRST for any company-specific query. Can optionally include FRED/EIA series.
-- `WebSearchTool`: **(Primary for Context & Recent Events)** Performs a web search. Use this alongside `run_full_research` for company queries to find recent analysis, broader market context, sentiment, or information not in the structured APIs. Also use for general financial topic queries.
-- `get_fred_series`: Fetches specific US economic indicators from FRED (e.g., 'UNRATE'). Use directly *only* if this is the sole data requested.
-- `get_eia_series`: Fetches specific US energy indicators from EIA (e.g., oil prices). Use directly *only* if this is the sole data requested.
-- `get_newsapi_headlines`: Fetches general news headlines for non-company queries (e.g., "semiconductor industry news"). Use directly *only* if this is the sole data requested.
+- `run_full_research`: **(MANDATORY FIRST STEP for Company Queries)** Gathers base quote, news, overview data. Its output is used implicitly.
+- `WebSearchTool`: **(MANDATORY SECOND STEP for Company Queries)** Performs web search. Use results to create the `WebAnalysisOutput`.
+- `get_fred_series`, `get_eia_series`, `get_newsapi_headlines`: Use *only* for non-company specific queries (these will likely result in a text response, not `WebAnalysisOutput`).
 
 **Workflow:**
-1.  **Analyze Request:** Determine if the query mentions a specific company name or symbol.
-2.  **Company Research (Mandatory First Step):**
-    a.  If a company name/symbol IS mentioned: Execute `run_full_research` **IMMEDIATELY**. Use the identified symbol(s). **Default `news_count` to 5 if not specified by the user.** Include any requested FRED/EIA series. This step is **NON-NEGOTIABLE** for company queries.
-    b.  After `run_full_research` completes: Execute `WebSearchTool` with relevant queries (e.g., "[Company Name] recent news", "[Symbol] stock analysis", "[Company Name] market sentiment") to gather context and recent qualitative insights. This step is also **MANDATORY** for company queries.
-    c.  Synthesize the structured JSON output from `run_full_research` and the text results from `WebSearchTool` into a comprehensive report. Label all sources clearly.
-3.  **Specific Economic/Energy Data:** If the user *only* asks for FRED or EIA data (and NO company is mentioned), use `get_fred_series` or `get_eia_series` respectively.
-4.  **General Topic/News:** If the user asks about a general topic or non-company news (and NO company is mentioned), use `WebSearchTool` and/or `get_newsapi_headlines`.
-5.  **Failure Handling:** If `run_full_research` is attempted and fails, clearly state this, then proceed with `WebSearchTool` for alternative information gathering.
-6.  **Output:** Provide a well-structured, synthesized answer combining insights from all tools used, with clear source attribution for each section.
+1.  **Analyze Request:** Identify company symbol(s).
+2.  **Company Research:**
+    a.  Execute `run_full_research` (default `news_count=5`).
+    b.  Execute `WebSearchTool` focusing on price impact queries.
+    c.  Analyze web search results. For the **top 5** relevant sources, create a `WebSearchNewsArticle` object.
+    d.  Construct the `WebAnalysisOutput` object, populating `overall_summary` (based on top 5), `relevant_news` (top 5), and `key_source_urls` (top 5).
+    e.  Return ONLY the `WebAnalysisOutput` object.
+3.  **Other Queries:** Use appropriate tools or `WebSearchTool` and return a text response.
+4.  **Failure Handling:** If `WebSearchTool` fails, populate the `error` field in the `WebAnalysisOutput` object. If `run_full_research` fails, still try `WebSearchTool` and return the `WebAnalysisOutput`.
 """
 
-# Instantiate the agent
+# Instantiate the agent with the NEW output_type
 try:
-    # Define the list of tools, including WebSearchTool
-    stonk_tools = [
-        run_full_research,         # Primary structured data tool
-        WebSearchTool(),           # Primary context/web tool
-        get_fred_series,           # Specific use tool
-        get_eia_series,            # Specific use tool
-        get_newsapi_headlines,     # Specific use tool
-    ]
+    # Check if necessary models are available before initializing
+    if not all([FullResearchReport, WebAnalysisOutput]):
+         raise ImportError("Required Pydantic models (FullResearchReport, WebAnalysisOutput) not loaded.")
 
+    stonk_tools = [run_full_research, WebSearchTool(), get_fred_series, get_eia_series, get_newsapi_headlines]
     stonk_research_agent = Agent(
         name="StonkResearchAgent",
         instructions=STONK_RESEARCH_INSTRUCTIONS,
-        # output_type=None, # Default output is string, suitable for summaries
         tools=stonk_tools,
+        output_type=WebAnalysisOutput, # Specify the NEW structured output type
         model=OPENAI_MODEL_ID
     )
-    print("StonkResearchAgent initialized successfully.")
-
+    print("StonkResearchAgent initialized successfully with output_type=WebAnalysisOutput.")
 except Exception as e:
     print(f"Error initializing StonkResearchAgent: {e}")
-    stonk_research_agent = None # Ensure agent is None if init fails
+    stonk_research_agent = None
 
-# --- Main Execution Logic (Example) ---
 
+# --- Helper Function to Find Tool Output ---
+def find_tool_output(items: list[Any], tool_name: str) -> Optional[str]:
+    """Finds the output string of a specific tool call in the agent results."""
+    # Determine the correct output item type based on availability
+    output_item_type = ToolCallOutputItem if ToolCallOutputItem else FunctionToolResult
+    if not output_item_type:
+        print("DEBUG: Neither ToolCallOutputItem nor FunctionToolResult available for tool output searching.")
+        return None
+
+    for i, item in enumerate(items):
+        if isinstance(item, output_item_type):
+            item_tool_name = getattr(item, 'tool_name', None)
+            # Specific check for run_full_research, as its name might be different in older SDK versions
+            is_research_tool = (item_tool_name == tool_name) or \
+                               (tool_name == "run_full_research" and isinstance(getattr(item, 'output', None), str) and getattr(item, 'output', '').strip().startswith('{\n  "report": ['))
+
+            if is_research_tool:
+                output_obj = getattr(item, 'output', None)
+                if isinstance(output_obj, str):
+                    print(f"DEBUG: Found output string for '{tool_name}' at index {i}.")
+                    return output_obj
+                else:
+                    # Handle cases where output might be pre-parsed (less common for raw tool output)
+                    try:
+                        output_str = json.dumps(output_obj)
+                        print(f"DEBUG: Found non-string output for '{tool_name}' at index {i}, converting to JSON.")
+                        return output_str
+                    except Exception as json_e:
+                        print(f"WARN: Could not convert output for '{tool_name}' at index {i} to JSON: {json_e}")
+                        return None
+
+    print(f"DEBUG: Output string for '{tool_name}' not found.")
+    return None
+
+
+# --- Main Execution Logic (Refactored for Manual Merging) ---
 async def main(user_query: str):
-    """Runs the Stonk Research Agent with a user query."""
-    if not stonk_research_agent:
-        print("Agent failed to initialize. Exiting.")
+    """
+    Runs the Stonk Research Agent, gets WebAnalysisOutput, finds run_full_research output,
+    merges them into FullResearchReport, and saves JSON.
+    """
+    if not all([stonk_research_agent, FullResearchReport, SymbolResearchData, WebSearchOutput, WebAnalysisOutput, ValidationError, Field, HttpUrl]):
+        print("Agent or Pydantic models failed to initialize. Exiting.")
         return
 
     print(f"\n--- Running Stonk Research Agent for query: '{user_query}' ---")
+    output_filename = "stonk_research_output.json"
+    final_report_obj: Optional[FullResearchReport] = None
+    web_analysis_obj: Optional[WebAnalysisOutput] = None
+    final_text_output: Optional[str] = None
 
     try:
-        # Use Runner.run to execute the agent
-        result = await Runner.run(stonk_research_agent, user_query)
+        # Run the agent
+        agent_run_result = await Runner.run(stonk_research_agent, user_query)
+        print(f"DEBUG: Agent run completed. Processing {len(agent_run_result.new_items)} new items.")
 
-        # --- Save run_full_research output if found ---
-        saved_output = False
-        print(f"DEBUG: Checking result.new_items (type: {type(result.new_items)}, length: {len(result.new_items) if hasattr(result.new_items, '__len__') else 'N/A'})")
+        # 1. Attempt to get the structured WebAnalysisOutput from the agent
+        try:
+            web_analysis_obj = agent_run_result.final_output_as(WebAnalysisOutput)
+            print("DEBUG: Successfully retrieved structured WebAnalysisOutput from agent result.")
+        except (ValidationError, TypeError, AttributeError) as e:
+            print(f"ERROR: Agent did not return a valid WebAnalysisOutput object: {e}")
+            web_analysis_obj = WebAnalysisOutput(error=f"Agent failed to return valid web analysis: {e}")
+            # Try to get raw text output as a fallback for supplementary info
+            final_text_output = agent_run_result.final_output if isinstance(agent_run_result.final_output, str) else "Error: Agent output was not text or valid structure."
 
-        # Determine which item type holds the tool output (ToolCallOutputItem preferred)
-        valid_output_item_type = ToolCallOutputItem # From import at top
+        # 2. Find the output from the 'run_full_research' tool call
+        research_json_str = find_tool_output(agent_run_result.new_items, "run_full_research")
 
-        if valid_output_item_type:
-            print(f"DEBUG: Will check for items of type {valid_output_item_type.__name__}")
-            for i, item in enumerate(result.new_items):
-                print(f"DEBUG: Item {i}: type={type(item)}")
-                is_tool_output_item = isinstance(item, valid_output_item_type)
-
-                if is_tool_output_item:
-                    # Get output and associated tool call ID (if available)
-                    tool_call_id = getattr(item, 'tool_call_id', 'N/A')
-                    item_output_obj = getattr(item, 'output', None)
-                    item_output_str = str(item_output_obj) if item_output_obj is not None else ""
-
-                    print(f"DEBUG: Item {i}: Is {valid_output_item_type.__name__}? {is_tool_output_item}, tool_call_id='{tool_call_id}', output_snippet='{item_output_str[:50]}...'")
-
-                    # Heuristic check: Does the output *look* like the JSON from run_full_research?
-                    # This is brittle but necessary without a definitive tool_name on ToolCallOutputItem.
-                    # A better approach might involve finding the corresponding ToolCallItem via tool_call_id.
-                    looks_like_research_output = isinstance(item_output_obj, str) and item_output_str.strip().startswith('{\n  "report": [')
-
-                    if looks_like_research_output:
-                        print(f"DEBUG: Found item {i} that looks like 'run_full_research' output based on content.")
-                        try:
-                            json_output_str = item_output_obj # Already confirmed it's a string
-                            # Attempt to pretty-print
-                            try:
-                                parsed_json = json.loads(json_output_str)
-                                pretty_json = json.dumps(parsed_json, indent=2)
-                            except json.JSONDecodeError:
-                                print("\n--- Warning: run_full_research output was not valid JSON, saving raw string. ---")
-                                pretty_json = json_output_str # Save the raw string
-
-                            # Save the file
-                            output_filename = "stonk_research_output.json"
-                            with open(output_filename, "w") as f:
-                                f.write(pretty_json)
-                            print(f"\n--- Saved run_full_research output to {output_filename} ---")
-                            saved_output = True
-                            break # Save only the first occurrence
-
-                        except Exception as write_e:
-                            print(f"\n--- Error saving run_full_research output: {write_e} ---")
-                            # Optionally print the raw output that failed to save
-                            # print(f"Raw output was: {item_output_obj}")
-                    else:
-                        print(f"DEBUG: Item {i} did not match expected start of run_full_research JSON.")
-                else:
-                     print(f"DEBUG: Item {i} is not of type {valid_output_item_type.__name__}.")
-
+        # 3. Load or initialize the FullResearchReport object from the tool output
+        if research_json_str:
+            try:
+                parsed_data = json.loads(research_json_str)
+                final_report_obj = FullResearchReport(**parsed_data)
+                print("DEBUG: Successfully loaded base research data from 'run_full_research' tool output.")
+                if not final_report_obj.report:
+                     print("WARN: Base report has empty 'report' list. Initializing.")
+                     final_report_obj.report.append(SymbolResearchData(symbol="UNKNOWN (Empty Base Report)"))
+            except (json.JSONDecodeError, ValidationError) as e:
+                print(f"ERROR: Failed to load/validate base structured research data from tool: {e}")
+                final_report_obj = FullResearchReport(report=[SymbolResearchData(symbol="UNKNOWN (Base Load/Validation Error)")])
+            except Exception as e:
+                 print(f"ERROR: Unexpected error processing base structured data: {e}")
+                 final_report_obj = FullResearchReport(report=[SymbolResearchData(symbol="UNKNOWN (Base Load Error)")])
         else:
-             print("DEBUG: Cannot check for tool output items because ToolCallOutputItem type is not available.")
+            print("WARN: 'run_full_research' tool output not found in agent results. Creating default report.")
+            final_report_obj = FullResearchReport(report=[SymbolResearchData(symbol="UNKNOWN (Base Data Missing)")])
 
-        if not saved_output:
-             print("\n--- Note: run_full_research tool output not found or not saved. ---")
+        # 4. Merge the WebAnalysisOutput into the FullResearchReport
+        if final_report_obj and final_report_obj.report and web_analysis_obj:
+            # Assume the analysis corresponds to the first symbol in the report
+            target_symbol_data = final_report_obj.report[0]
 
+            # Create a WebSearchOutput object from the WebAnalysisOutput data
+            # Convert key_source_urls from List[str] back to List[HttpUrl] for the final report structure
+            try:
+                key_urls_as_httpurl = [HttpUrl(url_str) for url_str in web_analysis_obj.key_source_urls]
+            except ValidationError as url_val_error:
+                 print(f"WARN: Error converting key_source_urls back to HttpUrl during merge: {url_val_error}. Using empty list.")
+                 key_urls_as_httpurl = []
 
-        print("\n--- Agent Final Output ---")
-        print(result.final_output)
+            merged_web_search = WebSearchOutput(
+                 query=None, # WebAnalysisOutput doesn't contain the query, set to None
+                 overall_summary=web_analysis_obj.overall_summary,
+                 relevant_news=web_analysis_obj.relevant_news,
+                 key_source_urls=key_urls_as_httpurl, # Use the converted list
+                 error=web_analysis_obj.error
+            )
+            target_symbol_data.web_search = merged_web_search
+            print(f"DEBUG: Merged WebAnalysisOutput into FullResearchReport for symbol {target_symbol_data.symbol}.")
+        elif final_report_obj and final_report_obj.report:
+             # Handle case where web analysis failed but base report exists
+             target_symbol_data = final_report_obj.report[0]
+             target_symbol_data.web_search = WebSearchOutput(error="Web analysis object was not generated or retrieved.")
+             print("WARN: WebAnalysisOutput was missing or invalid, updated report with error state.")
 
-        # Optional: Print intermediate steps/tool calls for debugging
-        # print("\n--- Agent Run Trace ---")
-        # for item in result.new_items:
-        #     print(item) # Adjust printing based on item type
+        # 5. Save Final Merged JSON
+        if final_report_obj:
+            try:
+                json_output = final_report_obj.model_dump_json(indent=2)
+                with open(output_filename, "w") as f:
+                    f.write(json_output)
+                print(f"\n--- Saved MERGED research output to {output_filename} ---")
+            except Exception as write_e:
+                print(f"\n--- Error saving merged JSON output: {write_e} ---")
+                try: # Save raw dict on error
+                    with open(output_filename + ".err", "w") as f_err:
+                        json.dump(final_report_obj.model_dump(mode='json'), f_err, indent=2, default=str)
+                    print(f"DEBUG: Saved raw dictionary to {output_filename}.err")
+                except Exception: pass
+        else:
+            print("\n--- No final report object generated, nothing saved. ---")
+
+        # Display Final Agent Text Output (Supplementary, if agent provided any)
+        # Note: The primary output is the JSON file now.
+        if not final_text_output: # Check if we already got fallback text
+             for item in reversed(agent_run_result.new_items):
+                  if isinstance(item, MessageOutputItem):
+                       text_content = ItemHelpers.text_message_output(item) # Use ItemHelpers
+                       if text_content:
+                           final_text_output = text_content
+                           break
+        print("\n--- Agent Final Text Output (Supplementary) ---")
+        print(final_text_output if final_text_output else "N/A (Agent's primary output is the structured WebAnalysisOutput, merged into JSON)")
 
     except Exception as e:
         print(f"\n--- Agent Run Error ---")
-        print(f"An unexpected error occurred: {e}")
+        print(f"An unexpected error occurred during agent run or merging: {e}")
+        # Attempt to save error report
+        try:
+            error_msg = f"Agent Run/Merge Error: {e}"
+            error_report = FullResearchReport(report=[SymbolResearchData(symbol="UNKNOWN (Run/Merge Error)", web_search=WebSearchOutput(error=error_msg))])
+            with open(output_filename, "w") as f_err:
+                 f_err.write(error_report.model_dump_json(indent=2))
+            print(f"DEBUG: Saved agent run/merge error report to {output_filename}")
+        except Exception: pass
 
 
 if __name__ == "__main__":
-    # Example queries to test the agent
-    # query1 = "Give me the latest quote and recent news for Microsoft (MSFT)."
-    # query2 = "What is the current US unemployment rate (UNRATE) and WTI spot price (PET.W_EPC0_FPF_Y48SE_DPG.W)?"
-    query3 = "Research NVIDIA (NVDA), include company overview, recent news, and current stock price."
-
-    asyncio.run(main(user_query=query3))
+    query = "Research NVIDIA (NVDA), include company overview, recent news, and current stock price."
+    asyncio.run(main(user_query=query))
     print("\nStonk Research Agent run finished.")
