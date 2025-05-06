@@ -1,8 +1,0 @@
-openai
-openai-agents # The core SDK for the new structure
-python-dotenv
-pandas
-numpy
-yfinance # For fetching stock data
-# Add analysis libraries later if needed (e.g., scikit-learn, statsmodels)
-# finnhub-python # Alternative data source

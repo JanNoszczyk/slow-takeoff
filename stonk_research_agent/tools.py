@@ -3,6 +3,7 @@ import asyncio
 import requests
 import yfinance as yf
 import json
+import sys # Import sys
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Literal
 from dotenv import load_dotenv
@@ -14,7 +15,7 @@ from pydantic import BaseModel, Field, HttpUrl, ValidationError, field_validator
 try:
     from agents import function_tool, RunContextWrapper
 except ImportError:
-    print("ERROR: Failed to import 'agents' library components. Make sure 'openai-agents' is installed.")
+    print("ERROR: Failed to import 'agents' library components. Make sure 'openai-agents' is installed.", file=sys.stderr)
     # Define dummy decorators/classes if import fails to avoid immediate script crash
     def function_tool(func=None, **kwargs): return func if func else lambda f: f
     class RunContextWrapper: pass
@@ -34,21 +35,21 @@ NEWSAPI_API_KEY = os.getenv("NEWSAPI_API_KEY")
 
 def _internal_get_yahoo_quote(symbol: str) -> Dict[str, Any]:
     """Core logic to fetch Yahoo Finance quote data."""
-    print(f"Logic: _internal_get_yahoo_quote called for {symbol}")
+    print(f"Logic: _internal_get_yahoo_quote called for {symbol}", file=sys.stderr)
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
         if not info or info.get('quoteType') == 'MUTUALFUND':
              fast_info = ticker.fast_info
              if not fast_info or fast_info.get('last_price') is None:
-                  print(f"Tool: get_yahoo_quote for {symbol} failed or returned no data (ticker.info empty/mutualfund, fast_info empty).")
+                  print(f"Tool: get_yahoo_quote for {symbol} failed or returned no data (ticker.info empty/mutualfund, fast_info empty).", file=sys.stderr)
                   return {"error": f"Could not retrieve valid quote info for symbol {symbol}. It might be delisted or invalid."}
-             print(f"Tool: get_yahoo_quote for {symbol} using fast_info fallback.")
+             print(f"Tool: get_yahoo_quote for {symbol} using fast_info fallback.", file=sys.stderr)
              fast_info['timestamp_utc'] = datetime.utcnow().isoformat()
              return {"quote": fast_info}
 
         info['timestamp_utc'] = datetime.utcnow().isoformat()
-        print(f"Tool: get_yahoo_quote for {symbol} successful.")
+        print(f"Tool: get_yahoo_quote for {symbol} successful.", file=sys.stderr)
         quote_data = {
             'symbol': info.get('symbol'),
             'shortName': info.get('shortName'),
@@ -71,15 +72,15 @@ def _internal_get_yahoo_quote(symbol: str) -> Dict[str, Any]:
         }
         return {"quote": quote_data}
     except Exception as e:
-        print(f"Error in _internal_get_yahoo_quote for {symbol}: {e}")
+        print(f"Error in _internal_get_yahoo_quote for {symbol}: {e}", file=sys.stderr)
         return {"error": f"Failed to fetch Yahoo Finance quote: {str(e)}"}
 
 def _internal_get_finnhub_news(symbol: str, count: int) -> List[Dict[str, Any]]:
     """Core logic to fetch Finnhub news."""
-    print(f"Logic: _internal_get_finnhub_news called for {symbol} (count: {count})")
+    print(f"Logic: _internal_get_finnhub_news called for {symbol} (count: {count})", file=sys.stderr)
     if count is None: count = 10
     if not FINNHUB_API_KEY:
-        print("Tool: get_finnhub_news failed: FINNHUB_API_KEY not set.")
+        print("Tool: get_finnhub_news failed: FINNHUB_API_KEY not set.", file=sys.stderr)
         return {"error": "FINNHUB_API_KEY is not set."}
     try:
         today = datetime.now().strftime('%Y-%m-%d')
@@ -89,23 +90,23 @@ def _internal_get_finnhub_news(symbol: str, count: int) -> List[Dict[str, Any]]:
         response.raise_for_status()
         news = response.json()
         if isinstance(news, list):
-            print(f"Tool: get_finnhub_news for {symbol} successful.")
+            print(f"Tool: get_finnhub_news for {symbol} successful.", file=sys.stderr)
             return news[:count]
         else:
-             print(f"Tool: get_finnhub_news for {symbol} returned unexpected format: {news}")
+             print(f"Tool: get_finnhub_news for {symbol} returned unexpected format: {news}", file=sys.stderr)
              return {"error": "Finnhub returned unexpected news format."}
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching Finnhub news for {symbol}: {e}")
+        print(f"Error fetching Finnhub news for {symbol}: {e}", file=sys.stderr)
         return {"error": f"Failed to fetch Finnhub news: {str(e)}"}
     except Exception as e:
-        print(f"Error processing Finnhub news for {symbol}: {e}")
+        print(f"Error processing Finnhub news for {symbol}: {e}", file=sys.stderr)
         return {"error": f"Failed to process Finnhub news: {str(e)}"}
 
 def _internal_get_alphavantage_overview(symbol: str) -> Dict[str, Any]:
     """Core logic to fetch AlphaVantage overview."""
-    print(f"Logic: _internal_get_alphavantage_overview called for {symbol}")
+    print(f"Logic: _internal_get_alphavantage_overview called for {symbol}", file=sys.stderr)
     if not ALPHAVANTAGE_API_KEY:
-        print("Tool: get_alphavantage_overview failed: ALPHAVANTAGE_API_KEY not set.")
+        print("Tool: get_alphavantage_overview failed: ALPHAVANTAGE_API_KEY not set.", file=sys.stderr)
         return {"error": "ALPHAVANTAGE_API_KEY is not set."}
     try:
         url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={symbol}&apikey={ALPHAVANTAGE_API_KEY}"
@@ -114,23 +115,23 @@ def _internal_get_alphavantage_overview(symbol: str) -> Dict[str, Any]:
         overview = response.json()
         if not overview or "Error Message" in overview or "Information" in overview:
             error_msg = overview.get("Error Message", overview.get("Information", f"No overview data found for {symbol}."))
-            print(f"Tool: get_alphavantage_overview for {symbol} failed or returned no data: {error_msg}")
+            print(f"Tool: get_alphavantage_overview for {symbol} failed or returned no data: {error_msg}", file=sys.stderr)
             return {"error": error_msg}
-        print(f"Tool: get_alphavantage_overview for {symbol} successful.")
+        print(f"Tool: get_alphavantage_overview for {symbol} successful.", file=sys.stderr)
         return {"overview": overview}
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching AlphaVantage overview for {symbol}: {e}")
+        print(f"Error fetching AlphaVantage overview for {symbol}: {e}", file=sys.stderr)
         return {"error": f"Failed to fetch AlphaVantage overview: {str(e)}"}
     except Exception as e:
-        print(f"Error processing AlphaVantage overview for {symbol}: {e}")
+        print(f"Error processing AlphaVantage overview for {symbol}: {e}", file=sys.stderr)
         return {"error": f"Failed to process AlphaVantage overview: {str(e)}"}
 
 def _internal_get_fred_series(series_id: str, limit: int) -> Dict[str, Any]:
     """Core logic to fetch FRED series data."""
-    print(f"Logic: _internal_get_fred_series called for {series_id} (limit: {limit})")
+    print(f"Logic: _internal_get_fred_series called for {series_id} (limit: {limit})", file=sys.stderr)
     if limit is None: limit = 10
     if not FRED_API_KEY:
-        print("Tool: get_fred_series failed: FRED_API_KEY not set.")
+        print("Tool: get_fred_series failed: FRED_API_KEY not set.", file=sys.stderr)
         return {"error": "FRED_API_KEY is not set."}
     try:
         url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&limit={limit}&sort_order=desc"
@@ -139,23 +140,23 @@ def _internal_get_fred_series(series_id: str, limit: int) -> Dict[str, Any]:
         data = response.json()
         if "observations" not in data or not data["observations"]:
              error_msg = data.get("error_message", f"No FRED observations found for series {series_id}.")
-             print(f"Tool: get_fred_series for {series_id} failed or returned no data: {error_msg}")
+             print(f"Tool: get_fred_series for {series_id} failed or returned no data: {error_msg}", file=sys.stderr)
              return {"error": error_msg}
-        print(f"Tool: get_fred_series for {series_id} successful.")
+        print(f"Tool: get_fred_series for {series_id} successful.", file=sys.stderr)
         return {"series_id": series_id, "observations": data["observations"]}
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching FRED series {series_id}: {e}")
+        print(f"Error fetching FRED series {series_id}: {e}", file=sys.stderr)
         return {"error": f"Failed to fetch FRED series {series_id}: {str(e)}"}
     except Exception as e:
-        print(f"Error processing FRED series {series_id}: {e}")
+        print(f"Error processing FRED series {series_id}: {e}", file=sys.stderr)
         return {"error": f"Failed to process FRED series {series_id}: {str(e)}"}
 
 def _internal_get_eia_series(series_id: str, limit: int) -> Dict[str, Any]:
     """Core logic to fetch EIA series data."""
-    print(f"Logic: _internal_get_eia_series called for {series_id} (limit: {limit})")
+    print(f"Logic: _internal_get_eia_series called for {series_id} (limit: {limit})", file=sys.stderr)
     if limit is None: limit = 10
     if not EIA_API_KEY:
-        print("Tool: get_eia_series failed: EIA_API_KEY not set.")
+        print("Tool: get_eia_series failed: EIA_API_KEY not set.", file=sys.stderr)
         return {"error": "EIA_API_KEY is not set."}
     try:
         base_url = "https://api.eia.gov/v2"
@@ -167,23 +168,23 @@ def _internal_get_eia_series(series_id: str, limit: int) -> Dict[str, Any]:
             error_msg = "No EIA data found or error occurred."
             if "error" in data: error_msg = data["error"]
             elif "data" in data and "error" in data["data"]: error_msg = data["data"]["error"]
-            print(f"Tool: get_eia_series for {series_id} failed or returned no data: {error_msg}")
+            print(f"Tool: get_eia_series for {series_id} failed or returned no data: {error_msg}", file=sys.stderr)
             return {"error": error_msg}
-        print(f"Tool: get_eia_series for {series_id} successful.")
+        print(f"Tool: get_eia_series for {series_id} successful.", file=sys.stderr)
         return {"series_id": series_id, "data": data["response"]["data"]}
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching EIA series {series_id}: {e}")
+        print(f"Error fetching EIA series {series_id}: {e}", file=sys.stderr)
         return {"error": f"Failed to fetch EIA series {series_id}: {str(e)}"}
     except Exception as e:
-        print(f"Error processing EIA series {series_id}: {e}")
+        print(f"Error processing EIA series {series_id}: {e}", file=sys.stderr)
         return {"error": f"Failed to process EIA series {series_id}: {str(e)}"}
 
 def _internal_get_newsapi_headlines(query: str, count: int) -> List[Dict[str, Any]]:
     """Core logic to fetch NewsAPI headlines."""
-    print(f"Logic: _internal_get_newsapi_headlines called for '{query}' (count: {count})")
+    print(f"Logic: _internal_get_newsapi_headlines called for '{query}' (count: {count})", file=sys.stderr)
     if count is None: count = 10
     if not NEWSAPI_API_KEY:
-        print("Tool: get_newsapi_headlines failed: NEWSAPI_API_KEY not set.")
+        print("Tool: get_newsapi_headlines failed: NEWSAPI_API_KEY not set.", file=sys.stderr)
         return {"error": "NEWSAPI_API_KEY is not set."}
     try:
         url = f"https://newsapi.org/v2/everything?q={query}&apiKey={NEWSAPI_API_KEY}&pageSize={min(count, 100)}&sortBy=publishedAt"
@@ -192,16 +193,16 @@ def _internal_get_newsapi_headlines(query: str, count: int) -> List[Dict[str, An
         news_data = response.json()
         if news_data.get("status") != "ok":
             error_msg = news_data.get("message", "NewsAPI returned an error.")
-            print(f"Tool: get_newsapi_headlines for '{query}' failed: {error_msg}")
+            print(f"Tool: get_newsapi_headlines for '{query}' failed: {error_msg}", file=sys.stderr)
             return {"error": error_msg}
         articles = news_data.get("articles", [])
-        print(f"Tool: get_newsapi_headlines for '{query}' successful.")
+        print(f"Tool: get_newsapi_headlines for '{query}' successful.", file=sys.stderr)
         return articles
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching NewsAPI headlines for '{query}': {e}")
+        print(f"Error fetching NewsAPI headlines for '{query}': {e}", file=sys.stderr)
         return {"error": f"Failed to fetch NewsAPI headlines: {str(e)}"}
     except Exception as e:
-        print(f"Error processing NewsAPI headlines for '{query}': {e}")
+        print(f"Error processing NewsAPI headlines for '{query}': {e}", file=sys.stderr)
         return {"error": f"Failed to process NewsAPI headlines: {str(e)}"}
 
 
@@ -210,7 +211,7 @@ def _internal_perform_web_search(query: str) -> Dict[str, Any]:
     Simulates performing a web search and manually structures the results.
     NOTE: This is currently a simulation. Replace with actual search logic.
     """
-    print(f"Logic: Simulating _internal_perform_web_search for query: '{query}'")
+    print(f"Logic: Simulating _internal_perform_web_search for query: '{query}'", file=sys.stderr)
     # Simulate finding some results - replace with actual search/parsing logic
     return {
         "query": query,
@@ -267,18 +268,42 @@ class WebSearchNewsArticle(BaseModel):
     publish_date: Optional[str] = Field(None, description="Publication date/time (ISO format or human-readable).")
     reason: Optional[str] = Field(None, description="Short (1-2 sentence) explanation of why this news might affect the stock price.")
     transcript: Optional[str] = Field(None, description="Relevant excerpt/transcript from the source supporting the reason.")
+    image_url: Optional[str] = Field(None, description="URL of the article's main image (if available).") # ADDED image_url
     # Removed ge=-1.0, le=1.0 constraints
     sentiment_score: Optional[float] = Field(None, description="Sentiment score indicating potential stock price impact (-1.0 negative to +1.0 positive).")
 
-    @field_validator('source_url')
+    @field_validator('image_url')
     @classmethod
-    def check_url(cls, v: str) -> str:
-        # Use Pydantic's HttpUrl internally for validation after receiving the string
+    def check_image_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            # This should ideally be caught by Pydantic based on type annotation Optional[str]
+            # but as a safeguard if raw data isn't a string.
+            raise ValueError(f"image_url must be a string or None, received {type(v)}")
+        if v == "": # Treat empty string as no image URL provided
+            return None
         try:
-            HttpUrl(v) # This will raise ValidationError if invalid
+            HttpUrl(v) # Validate non-empty string as a URL
             return v
         except ValidationError:
-            raise ValueError(f"Invalid URL format: {v}")
+            # Allow non-URL strings to pass as None, or raise error if strict URL is required
+            # For now, let's be lenient and treat invalid URL strings as None (no image)
+            # To be strict, uncomment the line below:
+            # raise ValueError(f"Invalid URL format for image_url: {v}")
+            print(f"Warning: Invalid image_url format '{v}', treating as no image.", file=sys.stderr)
+            return None
+
+    @field_validator('source_url')
+    @classmethod
+    def check_source_url(cls, v: str) -> str: # source_url is mandatory (str, not Optional[str])
+        if not v: # Should be caught by Pydantic if type is str and not Optional
+            raise ValueError("source_url cannot be empty")
+        try:
+            HttpUrl(v)
+            return v
+        except ValidationError:
+            raise ValueError(f"Invalid URL format for source_url: {v}")
 
     @field_validator('sentiment_score')
     @classmethod
@@ -391,55 +416,55 @@ def run_full_research(symbols: List[str], news_count: int, fred_series: Optional
     Returns:
         A JSON string representing a FullResearchReport object.
     """
-    print(f"DEBUG: Entering run_full_research with symbols={symbols}, news_count={news_count}, fred={fred_series}, eia={eia_series}")
+    print(f"DEBUG: Entering run_full_research with symbols={symbols}, news_count={news_count}, fred={fred_series}, eia={eia_series}", file=sys.stderr) # Redirect to stderr
     report_data = []
     if news_count is None: news_count = 5 # Default news count
     if fred_series is None: fred_series = [] # Ensure lists are not None
     if eia_series is None: eia_series = []
 
     for symbol in symbols:
-        print(f"DEBUG: Processing symbol: {symbol}")
+        print(f"DEBUG: Processing symbol: {symbol}", file=sys.stderr) # Redirect to stderr
         # Instantiate the Pydantic model
         symbol_data = SymbolResearchData(symbol=symbol)
-        print(f"DEBUG: SymbolResearchData instantiated successfully for {symbol}")
+        print(f"DEBUG: SymbolResearchData instantiated successfully for {symbol}", file=sys.stderr) # Redirect to stderr
 
         # --- Gather Data ---
-        print(f"DEBUG: Calling _internal_get_yahoo_quote for {symbol}")
+        print(f"DEBUG: Calling _internal_get_yahoo_quote for {symbol}", file=sys.stderr) # Redirect to stderr
         quote_result = _internal_get_yahoo_quote(symbol=symbol)
-        print(f"DEBUG: _internal_get_yahoo_quote result: {str(quote_result)[:100]}...")
+        print(f"DEBUG: _internal_get_yahoo_quote result: {str(quote_result)[:100]}...", file=sys.stderr) # Redirect to stderr
 
-        print(f"DEBUG: Calling _internal_get_finnhub_news for {symbol}")
+        print(f"DEBUG: Calling _internal_get_finnhub_news for {symbol}", file=sys.stderr) # Redirect to stderr
         fhub_news_result = _internal_get_finnhub_news(symbol=symbol, count=news_count)
-        print(f"DEBUG: _internal_get_finnhub_news result: {str(fhub_news_result)[:100]}...")
+        print(f"DEBUG: _internal_get_finnhub_news result: {str(fhub_news_result)[:100]}...", file=sys.stderr) # Redirect to stderr
 
-        print(f"DEBUG: Calling _internal_get_newsapi_headlines for {symbol}")
+        print(f"DEBUG: Calling _internal_get_newsapi_headlines for {symbol}", file=sys.stderr) # Redirect to stderr
         napi_news_result = _internal_get_newsapi_headlines(query=symbol, count=news_count)
-        print(f"DEBUG: _internal_get_newsapi_headlines result: {str(napi_news_result)[:100]}...")
+        print(f"DEBUG: _internal_get_newsapi_headlines result: {str(napi_news_result)[:100]}...", file=sys.stderr) # Redirect to stderr
 
-        print(f"DEBUG: Calling _internal_get_alphavantage_overview for {symbol}")
+        print(f"DEBUG: Calling _internal_get_alphavantage_overview for {symbol}", file=sys.stderr) # Redirect to stderr
         overview_result = _internal_get_alphavantage_overview(symbol=symbol)
-        print(f"DEBUG: _internal_get_alphavantage_overview result: {str(overview_result)[:100]}...")
+        print(f"DEBUG: _internal_get_alphavantage_overview result: {str(overview_result)[:100]}...", file=sys.stderr) # Redirect to stderr
 
         # Call the internal (simulated) web search function
-        print(f"DEBUG: Calling _internal_perform_web_search for {symbol}")
+        # print(f"DEBUG: Calling _internal_perform_web_search for {symbol}", file=sys.stderr) # Redirect to stderr - Removed call below
         # Removed call to _internal_perform_web_search
 
         fred_results = {}
-        print(f"DEBUG: Processing FRED series: {fred_series}")
+        print(f"DEBUG: Processing FRED series: {fred_series}", file=sys.stderr) # Redirect to stderr
         for series_id in fred_series:
-            print(f"DEBUG: Calling _internal_get_fred_series for {series_id}")
+            print(f"DEBUG: Calling _internal_get_fred_series for {series_id}", file=sys.stderr) # Redirect to stderr
             fred_results[series_id] = _internal_get_fred_series(series_id=series_id, limit=5)
-            print(f"DEBUG: _internal_get_fred_series result for {series_id}: {str(fred_results[series_id])[:100]}...")
+            print(f"DEBUG: _internal_get_fred_series result for {series_id}: {str(fred_results[series_id])[:100]}...", file=sys.stderr) # Redirect to stderr
 
         eia_results = {}
-        print(f"DEBUG: Processing EIA series: {eia_series}")
+        print(f"DEBUG: Processing EIA series: {eia_series}", file=sys.stderr) # Redirect to stderr
         for series_id in eia_series:
-            print(f"DEBUG: Calling _internal_get_eia_series for {series_id}")
+            print(f"DEBUG: Calling _internal_get_eia_series for {series_id}", file=sys.stderr) # Redirect to stderr
             eia_results[series_id] = _internal_get_eia_series(series_id=series_id, limit=5)
-            print(f"DEBUG: _internal_get_eia_series result for {series_id}: {str(eia_results[series_id])[:100]}...")
+            print(f"DEBUG: _internal_get_eia_series result for {series_id}: {str(eia_results[series_id])[:100]}...", file=sys.stderr) # Redirect to stderr
 
         # --- Populate Pydantic Model ---
-        print(f"DEBUG: Populating Pydantic model for {symbol}")
+        print(f"DEBUG: Populating Pydantic model for {symbol}", file=sys.stderr) # Redirect to stderr
         symbol_data.yahoo_quote = YahooQuoteData(**quote_result)
         if isinstance(fhub_news_result, list): symbol_data.finnhub_news = FinnhubNewsData(news=fhub_news_result)
         else: symbol_data.finnhub_news = FinnhubNewsData(**fhub_news_result)
@@ -448,10 +473,10 @@ def run_full_research(symbols: List[str], news_count: int, fred_series: Optional
         # Conditionally populate AlphaVantage data
         if overview_result and "error" in overview_result:
             symbol_data.alphavantage_overview = None # Assign None if there's an error
-            print(f"DEBUG: AlphaVantage error found for {symbol}, setting overview to None.")
+            print(f"DEBUG: AlphaVantage error found for {symbol}, setting overview to None.", file=sys.stderr) # Redirect to stderr
         else:
             symbol_data.alphavantage_overview = AlphavantageOverviewData(**overview_result)
-            print(f"DEBUG: AlphaVantage data populated successfully for {symbol}.")
+            print(f"DEBUG: AlphaVantage data populated successfully for {symbol}.", file=sys.stderr) # Redirect to stderr
 
         for series_id, result in fred_results.items():
             if "error" in result: symbol_data.fred_series[series_id] = FredSeriesData(error=result["error"])
@@ -466,7 +491,7 @@ def run_full_research(symbols: List[str], news_count: int, fred_series: Optional
 
     final_report = FullResearchReport(report=report_data)
     json_output = final_report.model_dump_json(indent=2)
-    print(f"DEBUG: run_full_research final JSON output (length: {len(json_output)}):\n{json_output[:500]}...")
+    print(f"DEBUG: run_full_research final JSON output (length: {len(json_output)}):\n{json_output[:500]}...", file=sys.stderr) # Redirect to stderr
     return json_output
 
 

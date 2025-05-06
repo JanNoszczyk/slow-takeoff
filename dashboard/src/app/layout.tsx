@@ -1,16 +1,15 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { GeistSans } from "geist/font/sans"; // Correct import from geist package
+import { GeistMono } from "geist/font/mono"; // Correct import from geist package
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+// Import fonts directly as objects, not functions to call
+const geistSans = GeistSans;
+const geistMono = GeistMono;
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+// The variable and subsets configuration might be handled differently
+// or might not be needed/supported when importing directly.
+// We'll rely on the default behavior for now.
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -24,10 +23,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      {/* Apply the font variables if they exist on the imported objects */}
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans?.variable} ${geistMono?.variable} antialiased`}
       >
         {children}
+        {/* Load Babel Standalone for client-side TSX compilation */}
+        <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
       </body>
     </html>
   );

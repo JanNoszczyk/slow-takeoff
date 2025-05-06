@@ -1,0 +1,19 @@
+# Cline's Project Intelligence (.clinerules)
+
+*This file captures project-specific patterns, preferences, and intelligence learned over time.*
+
+## Key Learnings & Patterns
+
+*   **Data Flow:** The Next.js dashboard frontend triggers data generation by POSTing to the `/api/generate-dashboard` route. This route executes the `run_pipeline.py` script.
+*   **Pipeline Output:** `run_pipeline.py` orchestrates the backend process (running `stonk_research_agent`, then `dashboard_agent`) and MUST output the final, dynamically generated TSX code for the news display as a plain string to standard output (`stdout`) for the Next.js API route to consume.
+*   **Agent Script Return Value:** Python scripts/functions that run agents (like `stonk_research_agent.agent.main`) and are called by orchestrators (like `run_pipeline.py`) MUST explicitly `return` meaningful results (e.g., `agent_run_result` object for stonk agent, TSX string for dashboard agent function) so the caller can process them.
+*   **UI Generation:** The news display section is dynamically generated as a TSX string by the `project_agents/dashboard_agent`. The Next.js frontend (`page.tsx`) receives this string from the API and renders it using `dangerouslySetInnerHTML`. Other UI parts (quote, summary) were previously handled by static components but are currently not rendered in `page.tsx`.
+*   **Script Roles:**
+    *   `run_pipeline.py`: Orchestrates backend: runs stonk agent, prepares JSON, runs dashboard agent, outputs TSX string.
+    *   `stonk_research_agent/agent.py`: Performs research, outputs structured JSON data (`WebAnalysisOutput`, `FullResearchReport`), saves merged JSON report file (`stonk_research_output.json`).
+    *   `project_agents/dashboard_agent/agent.py` & `tools.py`: Contains `run_tsx_generation` logic and `generate_news_display_code` tool to create TSX code string from news JSON data.
+    *   `dashboard/src/app/api/generate-dashboard/route.ts`: Executes `run_pipeline.py`, captures TSX string output, returns it as plain text to frontend.
+    *   `dashboard/src/app/page.tsx`: Fetches TSX string from API, renders it dynamically.
+    *   `run_dashboard_agent.py`: Obsolete/incorrect.
+
+*(This is a living document. Update it as new insights emerge during the project.)*

@@ -193,3 +193,37 @@ gcp-login.json
 uv.lock
 
 wealtharc_api_responses.log
+
+# Next.js specific
+# Ignore .next directory at the root (if any) and within the dashboard directory
+.next/
+dashboard/.next/
+# Ignore build output directory
+out/
+dashboard/out/
+
+# Node.js
+# Ignore node_modules in any directory, especially dashboard/node_modules/
+**/node_modules/
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# Lockfiles - uncomment if you don't want to commit them
+# package-lock.json
+# yarn.lock
+
+# Editor/IDE specific history
+# For VS Code local history
+.history/
+dashboard/.history/
+
+# Temporary files created by scripts (e.g., dashboard agent for linting)
+dashboard/temp/
+
+# macOS specific
+**/.[Dd][Ss]_[Ss]tore
+
+# Python version file (often project-specific, but sometimes ignored)
+# If you want to track it, remove or comment out the line below.
+# .python-version
