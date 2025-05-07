@@ -308,9 +308,11 @@ async def main(user_query: str):
         if final_report_obj:
             try:
                 json_output = final_report_obj.model_dump_json(indent=2)
+                # Removed: print(json_output, file=sys.stdout) - run_pipeline.py handles final stdout
+                # Optionally, still save to file for debugging or other uses
                 with open(output_filename, "w") as f:
                     f.write(json_output)
-                print(f"\n--- Saved MERGED research output to {output_filename} ---", file=sys.stderr)
+                print(f"\n--- Saved MERGED research output to {output_filename} ---", file=sys.stderr) # Log to stderr
             except Exception as write_e:
                 print(f"\n--- Error saving merged JSON output: {write_e} ---", file=sys.stderr)
                 try: # Save raw dict on error
@@ -350,6 +352,10 @@ async def main(user_query: str):
 
 
 if __name__ == "__main__":
-    query = "Research NVIDIA (NVDA), include company overview, recent news, and current stock price."
+    if len(sys.argv) > 1:
+        query = sys.argv[1]
+    else:
+        print("Usage: python agent.py \"<your research query>\"", file=sys.stderr)
+        sys.exit(1)
     asyncio.run(main(user_query=query))
     print("\nStonk Research Agent run finished.", file=sys.stderr)

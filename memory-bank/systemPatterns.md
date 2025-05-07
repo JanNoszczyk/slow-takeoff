@@ -70,4 +70,32 @@ graph LR
 *   Frontend injects the `css` string into a `<style>` tag in the `<head>`.
 *   Frontend renders the compiled React element.
 
+## NextChat Integration (New Primary UI)
+
+*   **Primary Interface:** The project will now use `NextChat` (cloned at `/Users/jannoszczyk/Documents/Github/slow-takeoff/nextchat/`) as the main user interface.
+*   **MCP Server Management:** NextChat is responsible for managing the lifecycle (spawning, monitoring) of MCP servers. This is configured via `nextchat/app/mcp/mcp_config.json`.
+    *   Each server is defined with a `command`, `args` (arguments to start the server script), and optional `env` variables.
+    *   The `ENABLE_MCP=true` environment variable in `nextchat/.env.local` activates this functionality.
+*   **MCP Communication:** NextChat's internal MCP client (likely in `nextchat/app/mcp/client.ts` and `actions.ts`) will communicate with the configured and spawned MCP servers (e.g., `stonk-research-mcp-server`, `wealthfront-mcp-server`).
+*   **UI Component Display:** The mechanism for displaying custom UI components (like TSX from `stonk-research-mcp-server`) within NextChat is still under investigation. It might involve:
+    *   NextChat's "Artifacts" feature.
+    *   A custom NextChat plugin.
+    *   Direct rendering capabilities if a tool response is identified as rich content.
+*   **Original Dashboard (`dashboard/`):** The existing Next.js dashboard in the `dashboard/` directory might become a secondary tool or its UI/API patterns might be adapted for NextChat plugins/artifacts if direct TSX rendering in NextChat proves complex.
+
+```mermaid
+graph LR
+    User --> NC[NextChat UI];
+    NC -->|Loads Config| NCC(nextchat/app/mcp/mcp_config.json);
+    NC -->|Spawns & Manages| SRS(stonk-research-mcp-server);
+    NC -->|Spawns & Manages| WFS(wealthfront-mcp-server);
+    NC -->|MCP Call: research_stock_or_company| SRS;
+    SRS -->|Executes| RPP(run_pipeline.py);
+    RPP -->|Generates TSX String| SRS;
+    SRS -->|Returns TSX String| NC;
+    NC -->|MCP Call: get_assets etc.| WFS;
+    WFS -->|Returns Data| NC;
+    NC -->|Renders Output (TSX via Artifacts/Plugin?)| User;
+```
+
 *(This file documents the system's structure and technical design, referencing projectbrief.md.)*

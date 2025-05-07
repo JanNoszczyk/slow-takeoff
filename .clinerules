@@ -9,11 +9,30 @@
 *   **Agent Script Return Value:** Python scripts/functions that run agents (like `stonk_research_agent.agent.main`) and are called by orchestrators (like `run_pipeline.py`) MUST explicitly `return` meaningful results (e.g., `agent_run_result` object for stonk agent, TSX string for dashboard agent function) so the caller can process them.
 *   **UI Generation:** The news display section is dynamically generated as a TSX string by the `project_agents/dashboard_agent`. The Next.js frontend (`page.tsx`) receives this string from the API and renders it using `dangerouslySetInnerHTML`. Other UI parts (quote, summary) were previously handled by static components but are currently not rendered in `page.tsx`.
 *   **Script Roles:**
-    *   `run_pipeline.py`: Orchestrates backend: runs stonk agent, prepares JSON, runs dashboard agent, outputs TSX string.
-    *   `stonk_research_agent/agent.py`: Performs research, outputs structured JSON data (`WebAnalysisOutput`, `FullResearchReport`), saves merged JSON report file (`stonk_research_output.json`).
-    *   `project_agents/dashboard_agent/agent.py` & `tools.py`: Contains `run_tsx_generation` logic and `generate_news_display_code` tool to create TSX code string from news JSON data.
-    *   `dashboard/src/app/api/generate-dashboard/route.ts`: Executes `run_pipeline.py`, captures TSX string output, returns it as plain text to frontend.
-    *   `dashboard/src/app/page.tsx`: Fetches TSX string from API, renders it dynamically.
+    *   `run_pipeline.py`: Orchestrates backend: runs stonk agent, prepares JSON, runs dashboard agent, outputs TSX string. (Still used by `stonk-research-mcp-server`)
+    *   `stonk_research_agent/agent.py`: Performs research, outputs structured JSON data (`WebAnalysisOutput`, `FullResearchReport`), saves merged JSON report file (`stonk_research_output.json`). (Still used by `stonk-research-mcp-server`)
+    *   `project_agents/dashboard_agent/agent.py` & `tools.py`: Contains `run_tsx_generation` logic and `generate_news_display_code` tool to create TSX code string from news JSON data. (Still used by `stonk-research-mcp-server`)
+    *   `dashboard/src/app/api/generate-dashboard/route.ts`: Original API for the `dashboard/` app. Less relevant now NextChat is primary.
+    *   `dashboard/src/app/page.tsx`: Original UI for the `dashboard/` app. Less relevant now NextChat is primary.
     *   `run_dashboard_agent.py`: Obsolete/incorrect.
+
+## NextChat Integration & TSX Artifact Rendering
+
+*   **Primary UI:** `nextchat/` is the main user interface.
+*   **MCP Server Management:** NextChat manages MCP servers (e.g., `stonk-research-mcp-server`, `wealthfront-mcp-server`) via `nextchat/app/mcp/mcp_config.json`.
+*   **TSX Artifact Workflow:**
+    1.  User calls `research_stock_or_company` tool from `stonk-research-mcp-server` via NextChat UI.
+    2.  `stonk-research-mcp-server` returns a TSX string.
+    3.  `nextchat/app/store/chat.ts` intercepts this response.
+    4.  It calls `nextchat/app/api/generate-tailwind-css/route.ts` to get dynamic Tailwind CSS for the TSX.
+    5.  `chat.ts` constructs a full HTML document (TSX, dynamic CSS, React/Babel CDN links).
+    6.  This HTML is posted as an artifact to NextChat's `/api/artifacts` endpoint.
+    7.  The chat message in NextChat is updated with `[artifact:id]`.
+    8.  `nextchat/app/components/chat.tsx` detects this, fetches the artifact content, and renders it using the `HTMLPreview` component (iframe).
+*   **Key NextChat Files for Artifacts:**
+    *   `nextchat/app/store/chat.ts`: Logic for intercepting MCP responses and preparing/posting artifacts.
+    *   `nextchat/app/components/chat.tsx`: Logic for detecting artifact messages and rendering `HTMLPreview`.
+    *   `nextchat/app/api/generate-tailwind-css/route.ts`: API to dynamically generate Tailwind CSS.
+    *   `nextchat/app/mcp/mcp_config.json`: Configuration for MCP servers.
 
 *(This is a living document. Update it as new insights emerge during the project.)*
