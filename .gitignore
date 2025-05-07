@@ -190,6 +190,13 @@ gcp-login.json
 *.json
 *.jsonl
 
+# NextChat specific
+# Exclude the entire nextchat directory (will be downloaded by setup script)
+/nextchat/
+# But include our custom files
+!/custom-nextchat-files/
+!/custom-nextchat-files/**/*
+
 uv.lock
 
 wealtharc_api_responses.log

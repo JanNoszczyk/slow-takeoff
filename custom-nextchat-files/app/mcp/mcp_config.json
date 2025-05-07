@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "stonk_research_mcp_server": {
+      "command": "node",
+      "args": ["/Users/jannoszczyk/Documents/Cline/MCP/stonk-research-mcp-server/build/index.js"],
+      "env": {
+        "NODE_ENV": "development",
+        "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_FROM_ROOT_ENV",
+        "FINNHUB_API_KEY": "YOUR_FINNHUB_API_KEY_FROM_ROOT_ENV",
+        "ALPHAVANTAGE_API_KEY": "YOUR_ALPHAVANTAGE_API_KEY_FROM_ROOT_ENV",
+        "FRED_API_KEY": "YOUR_FRED_API_KEY_FROM_ROOT_ENV",
+        "EIA_API_KEY": "YOUR_EIA_API_KEY_FROM_ROOT_ENV",
+        "NEWSAPI_API_KEY": "YOUR_NEWSAPI_API_KEY_FROM_ROOT_ENV"
+      },
+      "status": "active"
+    },
+    "wealthfront_mcp_server": {
+      "command": "node",
+      "args": ["/Users/jannoszczyk/Documents/Cline/MCP/wealthfront-mcp-server/build/index.js"],
+      "env": {
+        "NODE_ENV": "development",
+        "WEALTH_ARC_API_KEY": "YOUR_WEALTH_ARC_API_KEY_FROM_ROOT_ENV",
+        "VIDAR_BASE_URL": "https://api.wealthdatabox.com/v1/"
+      },
+      "status": "active"
+    }
+  }
+}
