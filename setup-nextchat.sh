@@ -47,14 +47,27 @@ cp "$CUSTOM_FILES_DIR/app/mcp/mcp_config.json" "$NEXTCHAT_DIR/app/mcp/"
 echo "Setting up .env.local file..."
 cat > "$NEXTCHAT_DIR/.env.local" << EOL
 ENABLE_MCP=true
-# Add your OpenAI API key below
-# OPENAI_API_KEY=your-api-key-here
+# Add your OpenAI API key below (e.g., from your root .env file)
+# OPENAI_API_KEY=your-openai-api-key-here
 EOL
 
+echo ""
+echo "IMPORTANT: API Key Configuration for MCP Servers"
+echo "-------------------------------------------------"
+echo "The file '$NEXTCHAT_DIR/app/mcp/mcp_config.json' has been created with PLACEHOLDER API keys."
+echo "You MUST manually edit this file and replace placeholders like 'YOUR_OPENAI_API_KEY_FROM_ROOT_ENV'"
+echo "with your actual API keys. It is recommended to store all your keys in a root '.env' file"
+echo "and copy them into '$NEXTCHAT_DIR/app/mcp/mcp_config.json' and '$NEXTCHAT_DIR/.env.local' as needed."
+echo "DO NOT commit real API keys to mcp_config.json if you fork/distribute this further."
+echo ""
+echo "Also, ensure the 'args' in '$NEXTCHAT_DIR/app/mcp/mcp_config.json' point to the correct"
+echo "paths for your local MCP server builds if you are not using the original developer's paths."
+echo ""
+
 echo "NextChat setup complete!"
-echo "To install dependencies and start NextChat:"
+echo "To install dependencies and start NextChat (after configuring API keys):"
 echo "  cd nextchat"
 echo "  yarn install"
 echo "  yarn dev"
 echo ""
-echo "Don't forget to add your OpenAI API key to nextchat/.env.local"
+echo "Remember to add your OpenAI API key to '$NEXTCHAT_DIR/.env.local' and update placeholders in '$NEXTCHAT_DIR/app/mcp/mcp_config.json'."

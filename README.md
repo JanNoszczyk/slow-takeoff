@@ -17,9 +17,10 @@ The system uses the Model Context Protocol (MCP) to enable AI models to access e
   - [Overview](#overview)
   - [Table of Contents](#table-of-contents)
   - [Getting Started](#getting-started)
+  - [API Key Management and Security](#api-key-management-and-security)
     - [Prerequisites](#prerequisites)
     - [Installation](#installation)
-    - [API Key Configuration](#api-key-configuration)
+    - [API Key Configuration (Post-Setup Steps)](#api-key-configuration-post-setup-steps)
   - [Running the Application](#running-the-application)
     - [Starting NextChat (Primary UI)](#starting-nextchat-primary-ui)
     - [Running the Dashboard UI (Alternative)](#running-the-dashboard-ui-alternative)
@@ -42,6 +43,27 @@ The system uses the Model Context Protocol (MCP) to enable AI models to access e
 ## Getting Started
 
 Follow these steps to get the project up and running on your local machine.
+
+## API Key Management and Security
+
+**CRITICAL: All API keys and sensitive credentials should be managed through a single `.env` file in the project root.** This file is ignored by Git (via `.gitignore`) and **MUST NOT** be committed to version control.
+
+1.  **Create your `.env` file:**
+    Copy the provided example file:
+    ```bash
+    cp .env.example .env
+    ```
+2.  **Edit `.env`:**
+    Open the newly created `.env` file and replace all placeholder values (e.g., `"YOUR_OPENAI_API_KEY_HERE"`) with your actual API keys.
+
+This root `.env` file is the **single source of truth** for your secrets. Different parts of the application will consume these keys as follows:
+-   **Python Scripts (e.g., `run_pipeline.py`, standalone agent tests):** These scripts are generally configured to load variables directly from the root `.env` file using libraries like `python-dotenv`.
+-   **NextChat Application (`nextchat/`):**
+    -   For NextChat's own direct use of the OpenAI API (if configured for its internal LLM calls), you will need to copy your `OPENAI_API_KEY` from the root `.env` file into `nextchat/.env.local`.
+    -   For MCP Servers managed by NextChat, their specific API keys (like `FINNHUB_API_KEY`, `WEALTH_ARC_API_KEY`, etc.) also need to be taken from your root `.env` file and manually placed into the `env` sections of the `nextchat/app/mcp/mcp_config.json` file *after* the `setup-nextchat.sh` script has run and copied the template. The `setup-nextchat.sh` script will remind you to do this.
+-   **Dashboard Application (`dashboard/`):** If its API routes require API keys, they would typically expect them as environment variables, which can be sourced from the root `.env` when running `npm run dev` if your local shell environment is configured to load it, or by other means depending on your deployment.
+
+**Never commit files containing real API keys. The `custom-nextchat-files/app/mcp/mcp_config.json` in the repository is a template with placeholders.**
 
 ### Prerequisites
 
@@ -93,55 +115,39 @@ You will also need the following API keys:
     cd .. 
     ```
 
-### API Key Configuration
+### API Key Configuration (Post-Setup Steps)
 
-**IMPORTANT:** You must configure your API keys for the application to function correctly.
+After completing the Installation steps (including running `setup-nextchat.sh` and `yarn install`):
 
-1.  **NextChat OpenAI API Key:**
-    -   Edit `nextchat/.env.local`.
-    -   Add your OpenAI API key:
+1.  **Populate Root `.env` File:**
+    -   Ensure you have copied `.env.example` to `.env` in the project root and filled it with your actual API keys, as described in the [API Key Management and Security](#api-key-management-and-security) section.
+
+2.  **Configure `nextchat/.env.local`:**
+    -   The `setup-nextchat.sh` script creates a basic `nextchat/.env.local` with `ENABLE_MCP=true`.
+    -   You **must** add your `OPENAI_API_KEY` to this file. Copy it from your root `.env` file:
         ```
-        OPENAI_API_KEY=your_openai_api_key_here
+        # In nextchat/.env.local
+        OPENAI_API_KEY=your_actual_openai_api_key_from_root_env
         ENABLE_MCP=true 
         ```
-        (Ensure `ENABLE_MCP=true` is present).
 
-2.  **MCP Server API Keys (within NextChat context):**
-    -   The MCP servers, when launched by NextChat, get their API keys from `nextchat/app/mcp/mcp_config.json`.
-    -   **CRITICAL:** The `nextchat/app/mcp/mcp_config.json` file in this repository contains **placeholder API keys**. You **MUST** replace these with your actual API keys.
-    -   Edit `nextchat/app/mcp/mcp_config.json` and update the `env` sections for `stonk_research_mcp_server` and `wealthfront_mcp_server` with your keys.
+3.  **Configure `nextchat/app/mcp/mcp_config.json`:**
+    -   The `setup-nextchat.sh` script copies a *template* `mcp_config.json` (from `custom-nextchat-files/app/mcp/`) into `nextchat/app/mcp/`. This template contains **placeholders** like `YOUR_OPENAI_API_KEY_FROM_ROOT_ENV`.
+    -   **Manually edit `nextchat/app/mcp/mcp_config.json`**. Replace each placeholder with the corresponding actual API key from your root `.env` file.
+    -   Example snippet from `nextchat/app/mcp/mcp_config.json` that needs editing:
         ```json
-        // Example for stonk_research_mcp_server in nextchat/app/mcp/mcp_config.json
-        "stonk_research_mcp_server": {
-          // ... other config ...
+        // ...
           "env": {
             "NODE_ENV": "development",
-            "OPENAI_API_KEY": "YOUR_OPENAI_KEY", // Replace this
-            "FINNHUB_API_KEY": "YOUR_FINNHUB_KEY", // Replace this
-            // ... other keys ...
+            "OPENAI_API_KEY": "YOUR_OPENAI_API_KEY_FROM_ROOT_ENV", // Replace this
+            "FINNHUB_API_KEY": "YOUR_FINNHUB_API_KEY_FROM_ROOT_ENV", // Replace this
+            // ... and other keys ...
           },
-          // ...
-        },
-        // Example for wealthfront_mcp_server
-        "wealthfront_mcp_server": {
-            // ... other config ...
-            "env": {
-                "NODE_ENV": "development",
-                "WEALTH_ARC_API_KEY": "YOUR_WEALTHARC_KEY", // Replace this
-                "VIDAR_BASE_URL": "https://api.wealthdatabox.com/v1/"
-            },
-            // ...
-        }
+        // ...
         ```
+    -   **Also, verify and update the `args` (paths to MCP server executables)** in `nextchat/app/mcp/mcp_config.json` if your local setup differs from the default paths (e.g., `/Users/jannoszczyk/...`).
 
-3.  **API Keys for Standalone Script/Server Execution:**
-    -   If you plan to run Python scripts (e.g., `run_pipeline.py`) or MCP servers independently (outside of NextChat's management), you'll need to set environment variables directly in your terminal or via a `.env` file in the project root (this project is configured to load `.env` files for Python scripts).
-        ```bash
-        # Example for project root .env file
-        OPENAI_API_KEY=your_openai_api_key_here
-        FINNHUB_API_KEY=your_finnhub_api_key_here
-        # ... other keys ...
-        ```
+With these steps, your API keys are managed centrally in the root `.env` and then selectively applied to the necessary configuration files for NextChat and its MCP servers.
 
 ## Running the Application
 
